@@ -7,7 +7,7 @@ __pycache__/
 # Ignore data and output folders to prevent large files from hitting the 100MB limit
 data/
 output/
-
+d_notebook_data/
 # Jupyter Notebook checkpoints
 .ipynb_checkpoints/
 
