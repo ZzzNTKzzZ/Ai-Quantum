@@ -1,0 +1,20 @@
+# Ignore virtual environments
+venv/
+.env/
+env/
+__pycache__/
+
+# Ignore data and output folders to prevent large files from hitting the 100MB limit
+data/
+output/
+
+# Jupyter Notebook checkpoints
+.ipynb_checkpoints/
+
+# IDE files
+.vscode/
+.idea/
+
+# OS files
+.DS_Store
+Thumbs.db

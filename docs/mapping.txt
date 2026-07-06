@@ -1,0 +1,117 @@
+Danh sách phân loại nhóm ngành của 46 mã cổ phiếu (VN46):
+
+1. Bất động sản & Hạ tầng:
+- SJS: Bất động sản
+- VIC: Tập đoàn đa ngành (Trọng tâm Bất động sản)
+- NLG: Bất động sản
+- PDR: Bất động sản
+- KDH: Bất động sản
+- DIG: Bất động sản
+- DXG: Bất động sản dịch vụ
+- HDC: Bất động sản
+- KBC: Bất động sản khu công nghiệp
+- TCH: Bất động sản và Phân phối ô tô
+- CII: Xây dựng và Phát triển hạ tầng
+
+2. Ngân hàng:
+- BID: Ngân hàng
+- CTG: Ngân hàng
+- VCB: Ngân hàng
+- STB: Ngân hàng
+- EIB: Ngân hàng
+- MBB: Ngân hàng
+
+3. Chứng khoán & Tài chính & Bảo hiểm:
+- SSI: Chứng khoán
+- HCM: Chứng khoán
+- BVH: Bảo hiểm
+
+4. Bán lẻ & Hàng tiêu dùng:
+- PNJ: Bán lẻ trang sức, vàng bạc
+- MWG: Bán lẻ (Điện thoại, điện máy, bách hóa)
+- DGW: Bán lẻ & Phân phối thiết bị công nghệ
+- MSN: Hàng tiêu dùng thiết yếu
+- VNM: Thực phẩm (Sữa)
+- KDC: Thực phẩm
+
+5. Vật liệu xây dựng & Xây dựng:
+- HPG: Thép & Công nghiệp nặng
+- HSG: Thép (Tôn mạ)
+- NKG: Thép
+- HT1: Xi măng
+- BMP: Nhựa xây dựng
+- CTD: Xây dựng
+
+6. Năng lượng & Dầu khí:
+- GAS: Khí đốt
+- PVD: Dịch vụ khoan dầu khí
+- NT2: Điện khí
+- REE: Cơ điện lạnh và Năng lượng
+
+7. Hóa chất & Phân bón & Cao su:
+- DCM: Phân bón
+- DPM: Phân bón
+- PHR: Cao su tự nhiên
+
+8. Cảng biển & Vận tải:
+- GMD: Cảng biển và Logistics
+- VSC: Cảng biển
+- PVT: Vận tải dầu khí
+
+9. Nông nghiệp & Thủy sản:
+- SBT: Nông nghiệp (Mía đường)
+- HAG: Nông nghiệp
+- VHC: Thủy sản (Cá tra)
+
+10. Công nghệ Thông tin:
+- FPT: Công nghệ thông tin & Viễn thông
+
+
+---
+Danh sách Mapping chi tiết (Mã: Ngành):
+BID: Ngân hàng
+PNJ: Bán lẻ (Vàng bạc đá quý)
+PVD: Dịch vụ Dầu khí
+PVT: Vận tải (Dầu khí)
+REE: Cơ điện lạnh / Năng lượng
+BMP: Nhựa xây dựng
+SBT: Nông nghiệp (Mía đường)
+NT2: Năng lượng (Điện)
+SJS: Bất động sản
+SSI: Chứng khoán
+PHR: Cao su
+TCH: Ô tô / Bất động sản
+VHC: Thủy sản
+VIC: Bất động sản / Đa ngành
+MSN: Tiêu dùng / Thực phẩm
+NLG: Bất động sản
+VNM: Thực phẩm (Sữa)
+BVH: Bảo hiểm
+CTG: Ngân hàng
+CTD: Xây dựng
+PDR: Bất động sản
+VCB: Ngân hàng
+KDH: Bất động sản
+STB: Ngân hàng
+VSC: Cảng biển / Logistics
+DCM: Phân bón / Hóa chất
+DIG: Bất động sản
+DPM: Phân bón / Hóa chất
+DXG: Bất động sản
+NKG: Thép
+EIB: Ngân hàng
+FPT: Công nghệ
+CII: Hạ tầng
+GMD: Cảng biển / Logistics
+HAG: Nông nghiệp / Đa ngành
+GAS: Dầu khí
+MBB: Ngân hàng
+HDC: Bất động sản
+MWG: Bán lẻ
+HPG: Thép
+HSG: Thép
+HT1: Vật liệu xây dựng (Xi măng)
+KBC: Bất động sản khu công nghiệp
+KDC: Thực phẩm
+HCM: Chứng khoán
+DGW: Bán lẻ

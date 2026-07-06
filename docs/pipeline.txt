@@ -1,0 +1,87 @@
+HYBRID DUAL-FREQUENCY TICKER-SPECIFIC HMM PIPELINE
+
+Dưới đây là kiến trúc luồng dữ liệu (Pipeline) tổng thể của hệ thống, bao gồm cả những phần đã được thực thi (trong b.ipynb) và những phần dự kiến/mở rộng:
+
+=========================================
+PHẦN 1: TIỀN XỬ LÝ & LỰA CHỌN ĐẶC TRƯNG (FEATURE ENGINEERING)
+[Hoàn thiện trong b.ipynb]
+=========================================
+1. 12 Raw Features (Dữ liệu thị trường, vĩ mô, dòng tiền...)
+        │
+        ▼
+2. Bộ lọc Thống kê (ADF + KPSS + Kurtosis)
+   -> Đảm bảo tính dừng (Stationarity) và loại bỏ phân phối đuôi béo (fat-tails).
+        │
+        ▼
+3. Feature Engineering (Normal Quantile Transform - NQT)
+   -> Ép các biến về phân phối chuẩn thông qua hàm phân vị (rolling rank).
+        │
+        ▼
+4. Chấm điểm Đặc trưng (Mutual Information + SHAP + Domain Knowledge)
+   -> Đánh giá độ quan trọng (tuyến tính/phi tuyến) đối với sự biến động của thị trường.
+        │
+        ▼
+5. Bộ lọc Đa cộng tuyến (VIF / Correlation Filter)
+   -> Loại bỏ tham lam các biến có VIF >= 5.0 để tránh suy biến ma trận hiệp phương sai.
+
+=========================================
+PHẦN 2: NHẬN DIỆN TRẠNG THÁI THỊ TRƯỜNG (MARKET REGIME DETECTION)
+[Hoàn thiện trong b.ipynb]
+=========================================
+6. HMM Hyperparameter Search (Tối ưu số trạng thái K)
+   -> Lặp qua K=2,3,4. 
+   -> Đánh giá bằng Composite Score = 0.3*Rank(BIC) + 0.5*Rank(LL_OOS) + 0.2*Rank(Stability/min_dur)
+        │
+        ▼
+7. Best HMM (Mô hình HMM tối ưu cho thị trường chung)
+        │
+        ▼
+8. Market Regime Probability & K-agnostic Labeling
+   -> Xác suất pha thị trường và Gán nhãn tự động (Bull/Bear/Sideways...) dựa trên lợi suất và độ biến động.
+
+=========================================
+PHẦN 3: TRIỂN KHAI CẤP ĐỘ CỔ PHIẾU/NGÀNH & MÔ HÌNH DỰ BÁO
+[Cần xây dựng thêm / Meta-Model]
+=========================================
+9. Suy luận cho mã cổ phiếu (Ticker-Specific Inference)
+   -> Ép cấu trúc thị trường: Lấy mô hình Market HMM predict trực tiếp lên dữ liệu Z-features của từng mã cổ phiếu (K_stock = K_market).
+        │
+        ├───────────────┐
+        ▼               ▼
+   Sector HMM         Stock HMM
+  (Chưa có code)  (Ép từ Market HMM)
+        │               │
+        └──────┬────────┘
+               ▼
+10. Meta Classifier (Mô hình phân lớp cấp 2)
+   -> Các thuật toán đề xuất: LightGBM / Bayesian / Logistic Regression.
+   -> Mục tiêu: Dùng Features gốc + Xác suất Regime (Market_Prob_0, 1...) để dự báo lợi suất (Return) hoặc trạng thái tương lai của cổ phiếu.
+   -> (Thực trạng: b.ipynb chỉ mới dừng ở bước xuất file train/val/test ra thư mục splits_ticker, chưa train Meta Classifier).
+               ▼
+11. Final Stock Regime / Trading Signal
+   -> Tín hiệu giao dịch cuối cùng cho từng mã cổ phiếu.
+
+
+=========================================
+PHẦN 4: ULTIMATE END-TO-END PIPELINE (CẬP NHẬT TRONG d.ipynb)
+[Hoàn thiện Toàn bộ Kiến trúc Thực chiến]
+=========================================
+Sau khi hợp nhất b.ipynb và c.ipynb, notebook d.ipynb đã hoàn thiện toàn bộ luồng xử lý từ vĩ mô xuống vi mô, bao gồm những nâng cấp đột phá sau:
+
+12. Tối ưu hóa Sector HMM (Grid Search K = 2, 3, 4)
+    -> Chạy vòng lặp Grid Search độc lập cho từng nhóm ngành (Ngân hàng, Thép, Bất động sản...).
+    -> Sử dụng Composite Score tương tự Market HMM để chọn ra số trạng thái K (2, 3, hoặc 4) phù hợp nhất với bản chất dòng tiền của từng ngành.
+
+13. Gán nhãn Ngữ Nghĩa (Semantic Alignment)
+    -> Khắc phục sự sai lệch khi K khác nhau giữa các ngành bằng cách gán xác suất ẩn về các nhãn ngữ nghĩa chuẩn (prob_sector_Bear, prob_sector_Bull, prob_sector_Sideways, prob_sector_Crisis, prob_sector_Euphoria).
+    -> Đảm bảo bộ Features (Đặc trưng) đưa vào Meta-Classifier hoàn toàn đồng nhất trên mọi mã cổ phiếu dù ngành của chúng chạy mô hình HMM khác nhau.
+
+14. Dự báo Thực chiến với Walk-Forward Validation (1D)
+    -> Target: Chuyển đổi sang dự báo lợi suất T+1 (return_1d) thay vì 5D.
+    -> Thuật toán: Meta-Classifier (LightGBM).
+    -> Cơ chế: Expanding Window (Tịnh tiến từng ngày). Train trên dữ liệu quá khứ đến ngày T-1 -> Dự báo ngày T -> Update dữ liệu ngày T vào để Train lại -> Dự báo ngày T+1.
+    -> Loại bỏ 100% hiện tượng rò rỉ dữ liệu (Look-ahead Bias) tại pha dự báo học máy.
+
+15. Trực quan hóa Phân hóa Dòng tiền (Interactive Divergence Visualization)
+    -> Bảng điều khiển 4 tầng đồ thị tương tác: (1) Market Regime, (2) Sector Regime, (3) Khối lượng, (4) Xác suất tăng T+1 từ Meta-Classifier.
+    -> Cung cấp khả năng soi chiếu sự phân hóa (lệch pha) giữa Vĩ mô (Market) và Dòng tiền Ngành (Sector) để đánh giá độ chuẩn xác của Meta-Classifier.
