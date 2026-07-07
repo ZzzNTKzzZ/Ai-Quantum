@@ -30,6 +30,8 @@ for t in m1_tickers:
     df['volume_ratio'] = df['volume'] / df['volume'].rolling(20).mean()
     df['og_return'] = df['close'].pct_change()
     
+    # Drop NaN values created by shift/rolling to ensure data integrity
+    df.dropna(inplace=True)
     dfs.append(df)
 
 if dfs:
