@@ -46,7 +46,12 @@ class CONFIG:
     # kích hoạt ngắt mạch: Chốt lời toàn bộ, bỏ túi tiền mặt và đứng ngoài thị trường chờ chu kỳ mới.
     TAKE_PROFIT_THRESHOLD = 0.15
     
-    # 7. CHIA KHÚC DỮ LIỆU ĐỂ HỌC VÀ THI (Rule 4: Walk-Forward Folds):
+    # 7. CHẾ ĐỘ CHỜ HÀNG VỀ T+2 (Rule 7: Settlement Lock):
+    # Đặc sản của Chứng khoán VN. Số ngày cổ phiếu bị "nhốt" chưa về tài khoản. 
+    # Trong những ngày này (VD: 2 ngày đầu tiên), AI tuyệt đối không thể bán cắt lỗ/chốt lời dù thị trường sập.
+    T_PLUS_SETTLEMENT = 2
+    
+    # 8. CHIA KHÚC DỮ LIỆU ĐỂ HỌC VÀ THI (Rule 4: Walk-Forward Folds):
     # Kỹ thuật chống "Học Vẹt" (Overfitting). Dữ liệu sẽ được chia làm N phần. 
     # AI sẽ học ở quá khứ và bị quăng vào tương lai xa lạ để thi đấu.
     WALK_FORWARD_SPLITS = 3
@@ -121,14 +126,15 @@ def load_data():
     
     # Đồng bộ ngày tháng giữa 2 bảng để không bị lệch dữ liệu
     returns_df, ticker_features_df = returns_df.align(ticker_features_df, axis=0, join='inner')
-    return returns_df, ticker_features_df, weights_dim
+    tickers = returns_df.columns.tolist()
+    return returns_df, ticker_features_df, weights_dim, tickers
 
 # ==========================================
 # LUẬT 1, 3, 5, 6: MÔI TRƯỜNG ĐẦU TƯ (GYM ENVIRONMENT)
 # ==========================================
 # Lớp này mô phỏng lại Sàn chứng khoán. Nơi AI sẽ thử nghiệm các lệnh Mua/Bán và nhận Phạt/Thưởng (Reward).
 class AdvancedPortfolioEnv(gym.Env):
-    def __init__(self, returns_df, features_df, weights_dim, step_size=CONFIG.HOLDING_PERIOD, cost_rate=CONFIG.COST_RATE, is_test=False):
+    def __init__(self, returns_df, features_df, weights_dim, tickers=None, step_size=CONFIG.HOLDING_PERIOD, cost_rate=CONFIG.COST_RATE, is_test=False):
         super().__init__()
         self.returns_arr = np.exp(returns_df.values) - 1.0 # Chuyển log return về Return bình thường
         self.features_arr = features_df.values
@@ -138,6 +144,7 @@ class AdvancedPortfolioEnv(gym.Env):
         self.step_size = step_size
         self.cost_rate = cost_rate
         self.is_test = is_test # Cờ kiểm tra: Đang Train (Học) hay đang Test (Thi đấu thực tế)
+        self.tickers = tickers
         
         # Không gian Hành động (Action Space): Một mảng [46] giá trị từ 0 đến 1, đại diện cho Tỷ trọng mua từng mã
         self.action_space = spaces.Box(low=0, high=1, shape=(self.weights_dim,), dtype=np.float32)
@@ -177,6 +184,13 @@ class AdvancedPortfolioEnv(gym.Env):
         if self.is_test:
             cash_pct = (1.0 - investment_ratio) * 100
             print(f"| Ngày {self.current_step:04d} | ĐẢO HÀNG: Giải ngân {investment_ratio*100:.1f}% vốn, Tiền mặt {cash_pct:.1f}%")
+            if self.tickers is not None and investment_ratio > 0:
+                held_tickers = []
+                for idx, w in enumerate(action):
+                    if w > 0.01: # Chỉ in các mã chiếm trên 1% danh mục
+                        held_tickers.append(f"{self.tickers[idx]}: {w*100:.1f}%")
+                if held_tickers:
+                    print(f"   -> Danh mục: " + ", ".join(held_tickers))
         
         # 2. Tính Phí Giao Dịch
         # Chỉ lấy phí trên sự "Thay đổi" của danh mục. Nếu giữ nguyên mã cũ thì không tốn phí.
@@ -212,19 +226,24 @@ class AdvancedPortfolioEnv(gym.Env):
             # Tính lợi nhuận tích lũy tạm thời từ đầu chu kỳ
             cum_ret_since_rebalance = (1 + cum_ret_since_rebalance) * (1 + daily_ret) - 1
             
-            # 4. Cơ chế Ngắt mạch (Rule 6: Dynamic Stop-Loss & Take-Profit)
-            if cum_ret_since_rebalance <= CONFIG.STOP_LOSS_THRESHOLD or cum_ret_since_rebalance >= CONFIG.TAKE_PROFIT_THRESHOLD:
-                if self.is_test:
-                    if cum_ret_since_rebalance <= CONFIG.STOP_LOSS_THRESHOLD:
-                        print(f"   -> [CẮT LỖ] Ngày {t:04d}: Lỗ {cum_ret_since_rebalance*100:.1f}% -> Bán tháo toàn bộ!")
-                    else:
-                        print(f"   -> [CHỐT LỜI] Ngày {t:04d}: Lãi {cum_ret_since_rebalance*100:.1f}% -> Cầm tiền mặt chờ tháng sau!")
-                        
-                # Phải mất phí giao dịch (Market Order) để bán tháo mọi thứ ra Tiền Mặt
-                exit_cost = self.cost_rate * np.sum(self.weights)
-                daily_portfolio_returns[-1] -= exit_cost # Trừ ngay vào lợi nhuận ngày hôm đó
-                self.weights = np.zeros(self.weights_dim) # Danh mục trắng trơn: Cầm 100% Tiền Mặt
-                is_cash_mode = True # Kích hoạt chế độ nghỉ phép
+            # Tính số ngày đã trôi qua kể từ lúc mua (Để xử lý T+2)
+            days_since_buy = t - self.current_step
+            
+            # 4. Cơ chế Ngắt mạch (Rule 6: Dynamic Stop-Loss & Take-Profit) kết hợp T+2 (Rule 7)
+            # Điều kiện tiên quyết: Hàng phải VỀ TÀI KHOẢN (Đã qua T+2) thì mới được phép Nhấn nút Bán
+            if days_since_buy >= CONFIG.T_PLUS_SETTLEMENT:
+                if cum_ret_since_rebalance <= CONFIG.STOP_LOSS_THRESHOLD or cum_ret_since_rebalance >= CONFIG.TAKE_PROFIT_THRESHOLD:
+                    if self.is_test:
+                        if cum_ret_since_rebalance <= CONFIG.STOP_LOSS_THRESHOLD:
+                            print(f"   -> [CẮT LỖ] Ngày {t:04d}: Lỗ {cum_ret_since_rebalance*100:.1f}% -> Bán tháo toàn bộ!")
+                        else:
+                            print(f"   -> [CHỐT LỜI] Ngày {t:04d}: Lãi {cum_ret_since_rebalance*100:.1f}% -> Cầm tiền mặt chờ tháng sau!")
+                            
+                    # Phải mất phí giao dịch (Market Order) để bán tháo mọi thứ ra Tiền Mặt
+                    exit_cost = self.cost_rate * np.sum(self.weights)
+                    daily_portfolio_returns[-1] -= exit_cost # Trừ ngay vào lợi nhuận ngày hôm đó
+                    self.weights = np.zeros(self.weights_dim) # Danh mục trắng trơn: Cầm 100% Tiền Mặt
+                    is_cash_mode = True # Kích hoạt chế độ nghỉ phép
         
         # Tính toán kết quả Báo cáo cuối chu kỳ
         daily_portfolio_returns = np.array(daily_portfolio_returns)
@@ -286,7 +305,7 @@ class AdvancedTickerExtractor(BaseFeaturesExtractor):
 # LUẬT 4: WALK-FORWARD VALIDATION (CHỐNG HỌC VẸT)
 # ==========================================
 # Đạo diễn toàn bộ quá trình: Chia dữ liệu -> Gọi AI vào Học (Train) -> Bắt AI đi Thi (Test) -> Báo cáo Lợi nhuận
-def walk_forward_train_test(returns_df, features_df, weights_dim):
+def walk_forward_train_test(returns_df, features_df, weights_dim, tickers):
     print("\n[LUẬT 4] KHỞI ĐỘNG WALK-FORWARD VALIDATION (CHỐNG HỌC VẸT)...")
     
     total_days = len(returns_df)
@@ -335,7 +354,7 @@ def walk_forward_train_test(returns_df, features_df, weights_dim):
         print("-------------------------------------------------------")
         
         # Tạo Sàn Chứng Khoán Thật cho quá trình Thi Đấu (is_test=True để in Log)
-        test_env = DummyVecEnv([lambda: AdvancedPortfolioEnv(returns_test, features_test, weights_dim, is_test=True)])
+        test_env = DummyVecEnv([lambda: AdvancedPortfolioEnv(returns_test, features_test, weights_dim, tickers=tickers, is_test=True)])
         obs = test_env.reset()
         
         portfolio_returns = []
@@ -358,5 +377,5 @@ def walk_forward_train_test(returns_df, features_df, weights_dim):
         print(f"=> [KẾT QUẢ] LỢI NHUẬN TÍCH LŨY FOLD {fold_idx + 1} (SAU {test_len} NGÀY THỰC CHIẾN): {cum_ret:.2f}%")
 
 if __name__ == "__main__":
-    returns_df, ticker_features_df, weights_dim = load_data()
-    walk_forward_train_test(returns_df, ticker_features_df, weights_dim)
+    returns_df, ticker_features_df, weights_dim, tickers = load_data()
+    walk_forward_train_test(returns_df, ticker_features_df, weights_dim, tickers)
