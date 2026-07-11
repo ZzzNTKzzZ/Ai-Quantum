@@ -1,7 +1,7 @@
 #!/usr/bin/env python
 # coding: utf-8
 
-# In[32]:
+# In[43]:
 
 
 import pandas as pd
@@ -21,7 +21,7 @@ warnings.filterwarnings('ignore') # Tắt các cảnh báo không cần thiết 
 
 # ## Khối cấu hình trung tâm (Control Panel) giúp bạn tinh chỉnh "tính cách" của AI 
 
-# In[33]:
+# In[44]:
 
 
 # mà không cần can thiệp sâu vào bên trong mã nguồn.
@@ -30,45 +30,29 @@ class CONFIG:
     # Tỷ lệ phần trăm CTCK thu cho mỗi lần bạn mua hoặc bán cổ phiếu. (VD: 0.2% = 0.002)
     COST_RATE = 0.0003
 
-    # 2. CHU KỲ REBALANCE (Rule 1: Holding Period):
-    # Thời gian (tính bằng ngày) AI bị ép phải "ôm chặt" danh mục trước khi được phép mua bán lại.
-    # Mục đích: Giảm thiểu Over-trading (giao dịch quá nhiều) để không bị bào mòn tài khoản bởi phí giao dịch.
-    HOLDING_PERIOD = 1
+    TURNOVER_PENALTY_RATE = 0.1
+    DRAWDOWN_PENALTY_RATE = 2.0
+    LIQUIDITY_BONUS_RATE = 0.02
+    TRAIN_WINDOW = 252
+    TEST_WINDOW = 21
+    SAVE_MODEL_PATH = "AI_Brain_Current.zip"
 
-    # 3. NGƯỠNG TỰ TIN VÀO CỔ PHIẾU (Rule 5: Cash Conviction Threshold):
-    # Mức độ tự tin tối thiểu (từ 0.0 đến 1.0) AI cần có để quyết định giải ngân.
-    # Nếu mức tự tin cao nhất của AI thấp hơn ngưỡng này (thị trường đang quá rủi ro/khó đoán), 
-    # nó sẽ tự động chừa lại phần vốn đó dưới dạng Tiền mặt để phòng thủ.
-    CASH_CONVICTION_THRESHOLD = 0.2
+    # Các giá trị tính điểm (Reward/Penalty System)
+    REWARD_WIN_MULT = 100
+    REWARD_LOSS_MULT = 200
+    REWARD_ALPHA_MULT = 50
+    REWARD_CASH_CRASH_MULT = 100
+    PENALTY_OVER_DIVERSIFICATION = 0.01
 
-    # 4. HÌNH PHẠT RỦI RO (Rule 3: Sharpe Penalty):
-    # Mức điểm âm sẽ phạt AI nếu danh mục của nó chọn bị Lỗ sau 1 chu kỳ Holding Period.
-    # Con số càng âm (VD: -2.0 hoặc -5.0) sẽ rèn luyện cho AI tính cẩn thận, chỉ mua mã an toàn.
-    PENALTY_FOR_LOSS = -1.0
-
-    # 5. CẮT LỖ ĐỘNG (Rule 6: Stop-Loss):
-    # Mức rớt giá tối đa cho phép. Nếu đang trong thời gian "ôm chặt" mà danh mục sập chạm mốc này,
-    # lệnh ngắt mạch sẽ kích hoạt: Bán tháo toàn bộ danh mục ngay lập tức để rút về Tiền mặt bảo toàn tính mạng.
-    STOP_LOSS_THRESHOLD = -0.07
-
-    # 6. CHỐT LỜI SỚM (Rule 6: Take-Profit):
-    # Mức lãi kỳ vọng. Nếu danh mục sinh lời nhanh và đạt mốc này trước khi hết hạn ôm,
-    # kích hoạt ngắt mạch: Chốt lời toàn bộ, bỏ túi tiền mặt và đứng ngoài thị trường chờ chu kỳ mới.
-    TAKE_PROFIT_THRESHOLD = 0.15
 
     # 7. CHẾ ĐỘ CHỜ HÀNG VỀ T+2 (Rule 7: Settlement Lock):
     # Đặc sản của Chứng khoán VN. Số ngày cổ phiếu bị "nhốt" chưa về tài khoản. 
     # Trong những ngày này (VD: 2 ngày đầu tiên), AI tuyệt đối không thể bán cắt lỗ/chốt lời dù thị trường sập.
     T_PLUS_SETTLEMENT = 3
 
-    # 8. CHIA KHÚC DỮ LIỆU ĐỂ HỌC VÀ THI (Rule 4: Walk-Forward Folds):
-    # Kỹ thuật chống "Học Vẹt" (Overfitting). Dữ liệu sẽ được chia làm N phần. 
-    # AI sẽ học ở quá khứ và bị quăng vào tương lai xa lạ để thi đấu.
-    WALK_FORWARD_SPLITS = 3
-
     # 8. SỐ BƯỚC ĐÀO TẠO (Training Timesteps):
     # Số vòng lặp để AI cập nhật bộ não. Càng cao (50k - 100k) AI càng thông minh nhưng thời gian train càng lâu.
-    TRAINING_TIMESTEPS = 15000
+    TRAINING_TIMESTEPS = 10000
 
     # 9. ĐỘ PHÂN BỔ VỐN (Entropy Coefficient):
     # Quyết định AI sẽ All-in hay Rải rác.
@@ -83,7 +67,7 @@ class CONFIG:
 
 # ## Hàm này nạp dữ liệu từ file Parquet (đã chạy HMM) và chế biến thêm các chỉ báo để tạo thành 
 
-# In[34]:
+# In[45]:
 
 
 def load_data():
@@ -123,7 +107,7 @@ def load_data():
     def calc_sma(df, n=5):
         return df.rolling(n).mean()
     sma_vol_5_df = calc_sma(vol_df)
-
+    sma_vol_20_df = calc_sma(vol_df, n=20)
     # RSI (Chuẩn Wilder's Smoothing)
     change_df = close_df - close_df.shift(1)
     gain_df = change_df.clip(lower=0)
@@ -138,11 +122,6 @@ def load_data():
     macd_df = close_df.ewm(span=12, adjust=False).mean() - close_df.ewm(span=26, adjust=False).mean()
     signal_df = macd_df.ewm(span=9, adjust=False).mean()
     hist_df = macd_df - signal_df
-
-    # Bollinger Bands
-    bb_mid_df = close_df.rolling(20).mean()
-    std_df = close_df.rolling(20).std(ddof=0)
-    bb_lower_df = bb_mid_df - 2 * std_df
 
     # Độ dốc xu hướng (Slope)
     def calc_slope(df, n=3):
@@ -159,7 +138,90 @@ def load_data():
 
     # LowestLow(5) và HighestHigh(10)
     lowest_low_5_df = low_df.rolling(5).min()
+    highest_high_5_df = high_df.rolling(5).max()
     highest_high_10_df = high_df.rolling(10).max()
+    highest_high_20_df = high_df.rolling(20).max()
+
+    # Đáy và đỉnh
+    # Ngày T-2 là Đỉnh nếu nó cao hơn T-4, T-3 (Quá khứ) VÀ cao hơn T-1, T (Hiện tại)
+    is_peak = (high_df.shift(2) > high_df.shift(4)) & \
+                (high_df.shift(2) > high_df.shift(3)) & \
+                (high_df.shift(2) > high_df.shift(1)) & \
+                (high_df.shift(2) > high_df)
+
+    # Ngày T-2 là Đáy nếu nó thấp hơn T-4, T-3 (Quá khứ) VÀ thấp hơn T-1, T (Hiện tại)
+    is_valley = (low_df.shift(2) < low_df.shift(4)) & \
+                (low_df.shift(2) < low_df.shift(3)) & \
+                (low_df.shift(2) < low_df.shift(1)) & \
+                (low_df.shift(2) < low_df)
+
+    peak_values = high_df.shift(2).where(is_peak, np.nan)
+    valley_values = low_df.shift(2).where(is_valley, np.nan)
+
+    last_peak_df = peak_values.ffill()
+    last_valley_df = valley_values.ffill()
+
+    # FIBONACCI
+    wave_amplitude_df = last_peak_df - last_valley_df
+    wave_state_df = pd.DataFrame(np.nan, index=high_df.index, columns=high_df.columns)
+
+    wave_state_df[is_peak] = 1
+    wave_state_df[is_valley] = -1
+
+    last_swing_type_df = wave_state_df.ffill()
+
+    # SUP() RES()
+    n = 20 # Số phiên để xác nhận Đỉnh/Đáy (Bạn có thể tinh chỉnh 10 hoặc 20)
+    window = 2 * n + 1
+
+    # 1. Tìm mức cao nhất/thấp nhất trong 41 ngày gần nhất (20 ngày trước + 1 ngày giữa + 20 ngày sau)
+    rolling_max = high_df.rolling(window).max()
+    rolling_min = low_df.rolling(window).min()
+
+    # 2. XÁC NHẬN ĐỈNH/ĐÁY KHÔNG DÙNG CENTER=TRUE
+    # Nếu giá cao nhất của 20 ngày trước (shift(20)) BẰNG với mức Max của toàn bộ 41 ngày
+    # -> Chứng tỏ 20 ngày trước là một ĐỈNH CỤC BỘ (Peak)
+    is_peak = (high_df.shift(n) == rolling_max)
+    is_valley = (low_df.shift(n) == rolling_min)
+
+    # 3. Ghi nhớ mức giá tại Đỉnh/Đáy đó
+    peak_values = high_df.shift(n).where(is_peak, np.nan)
+    valley_values = low_df.shift(n).where(is_valley, np.nan)
+
+    # 4. Kéo dài giá trị ra để lấy Hỗ trợ (Sup) và Kháng cự (Res) gần nhất
+    res_df = peak_values.ffill() # Đỉnh gần nhất (Res)
+    sup_df = valley_values.ffill() # Đáy gần nhất (Sup)
+
+
+    # SÓNG TĂNG CHÍNH = Mốc cuối cùng được xác nhận là 1 cái Đỉnh
+    # Trả về giá trị True/False cho từng ngày
+    is_upward_wave_df = (last_swing_type_df == 1)
+    fib_382_df = last_peak_df - (0.382 * wave_amplitude_df)
+    fib_500_df = last_peak_df - (0.500 * wave_amplitude_df)
+    fib_618_df = last_peak_df - (0.618 * wave_amplitude_df)
+    fib_ext_127_df = last_peak_df + (0.272 * wave_amplitude_df)
+    fib_ext_161_df = last_peak_df + (0.618 * wave_amplitude_df)
+
+     # Bollinger Bands 
+    bb_middle_df = close_df.rolling(20).mean()
+    bb_std_df = close_df.rolling(20).std()
+    bb_upper_df = bb_middle_df + (2 * bb_std_df)
+    bb_lower_df = bb_middle_df - (2 * bb_std_df)
+
+    # 2. TÍNH ĐỘ RỘNG DẢI BĂNG (BB WIDTH)
+    bb_width_df = (bb_upper_df - bb_lower_df) / bb_middle_df
+
+    # 3. TÍN HIỆU BIẾN ĐỘNG MẠNH (DẢI BĂNG MỞ RỘNG)
+    # So sánh độ rộng hôm nay với hôm qua VÀ với Trung bình 20 ngày
+    bb_expanding_df = (bb_width_df > bb_width_df.shift(1)) & \
+                        (bb_width_df > bb_width_df.rolling(20).mean())
+
+    # ACCUMULATION
+    highest_high_21_df = high_df.rolling(21).max().shift(1)
+    lowest_low_21_df = low_df.rolling(21).min().shift(1)
+
+    # Biên độ dao động của cái hộp nhỏ hơn 15%
+    is_accumulation_df = (highest_high_21_df - lowest_low_21_df) / lowest_low_21_df <= 0.15
     # Bóc tách dữ liệu HMM từ raw_df
     prob0_df = raw_df.pivot(index='time', columns='ticker', values='prob_ticker_0').fillna(0) 
     prob1_df = raw_df.pivot(index='time', columns='ticker', values='prob_ticker_1').fillna(0) 
@@ -186,33 +248,41 @@ def load_data():
 
     list_strategies = [vol_df ,low_df ,close_df, 
                        ema_df_20, ema_df_50, ema_df_200, 
-                       bb_lower_df, rsi_df, hist_df, 
+                       bb_lower_df, bb_middle_df ,bb_upper_df,
+                       rsi_df, hist_df, macd_df,
+                       sma_vol_20_df,
                        slope_ema20_3_df, slope_sma5_3_df, 
                        is_hammer_df.astype(float), is_bull_engulf_df.astype(float),
-                       lowest_low_5_df, highest_high_10_df]
+                       lowest_low_5_df, highest_high_5_df ,highest_high_10_df, highest_high_20_df,
+                       fib_382_df, fib_500_df, fib_618_df, is_upward_wave_df, fib_ext_127_df, fib_ext_161_df,
+                       sup_df, res_df,
+                       bb_expanding_df,
+                       is_accumulation_df,
+                       ]
 
     strategies_features_df = pd.concat(list_strategies, axis=1).fillna(0)
 
-    num_strategies_features = 15
+    num_strategies_features = 31
 
     # Đồng bộ độ dài
     returns_df, ai_features_df = returns_df.align(ai_features_df, axis=0, join='inner')
     returns_df, strategies_features_df = returns_df.align(strategies_features_df, axis=0, join='inner')
     tickers = returns_df.columns.tolist()
 
-    return returns_df, ai_features_df, strategies_features_df, weights_dim, tickers, num_strategies_features
+    dates = returns_df.index.strftime('%d/%m/%Y').tolist()
+    return returns_df, ai_features_df, strategies_features_df, weights_dim, tickers, num_strategies_features, dates
 
 
 # ## LUẬT 1, 3, 5, 6: MÔI TRƯỜNG ĐẦU TƯ (GYM ENVIRONMENT)
 
 # ## Lớp này mô phỏng lại Sàn chứng khoán. Nơi AI sẽ thử nghiệm các lệnh Mua/Bán và nhận Phạt/Thưởng (Reward).
 
-# In[36]:
+# In[46]:
 
 
 class AdvancedPortfolioEnv(gym.Env):
-        def __init__(self, returns_df, ai_features_df, script_features_df, weights_dim, num_script_features, tickers=None, step_size=CONFIG.HOLDING_PERIOD, cost_rate=CONFIG.
-  COST_RATE, is_test=False):
+        def __init__(self, returns_df, ai_features_df, script_features_df, weights_dim, num_script_features, tickers=None, step_size=1, cost_rate=CONFIG.COST_RATE, is_test=False, dates=None):
+
             super().__init__()
             self.returns_arr = np.exp(returns_df.values) - 1.0 
 
@@ -228,6 +298,10 @@ class AdvancedPortfolioEnv(gym.Env):
             self.cost_rate = cost_rate
             self.is_test = is_test 
             self.tickers = tickers
+            self.dates = dates
+            self.prev_weights = np.zeros(self.weights_dim)
+            self.high_watermark = 1.0
+            self.current_portfolio_value = 1.0
 
             self.action_space = spaces.Box(low=0, high=1, shape=(self.weights_dim,), dtype=np.float32)
             # Báo cho AI biết là nó chỉ cần học 10 tính năng (vì ai_features_df có 10 cột)
@@ -236,6 +310,8 @@ class AdvancedPortfolioEnv(gym.Env):
             self.current_step = 0
             self.weights = np.zeros(self.weights_dim)
             self.entry_prices = np.zeros(self.weights_dim)
+            self.entry_scenarios = np.zeros(self.weights_dim)
+            self.entry_stages = np.zeros(self.weights_dim)
         def reset(self, seed=None, options=None):
             self.current_step = 0
             self.weights = np.zeros(self.weights_dim)
@@ -263,7 +339,7 @@ class AdvancedPortfolioEnv(gym.Env):
             for i in range(self.weights_dim):
                 current_regime = np.argmax([current_obs[i][0], current_obs[i][1], current_obs[i][2]]) # 0: Bear, 1: SideWay, 2: Bull
 
-                # 13 chỉ báo kịch bản 
+                # Trích xuất toàn bộ 31 chỉ báo kịch bản
                 volume          = current_scripts[i][0]
                 low             = current_scripts[i][1]
                 close           = current_scripts[i][2]
@@ -271,147 +347,377 @@ class AdvancedPortfolioEnv(gym.Env):
                 ema50           = current_scripts[i][4]
                 ema200          = current_scripts[i][5]
                 bb_lower        = current_scripts[i][6]
-                rsi             = current_scripts[i][7]
-                macd_hist       = current_scripts[i][8]
-                slope_ema20_3     = current_scripts[i][9]
-                slope_sma5_3      = current_scripts[i][10]
-                is_hammer       = current_scripts[i][11]
-                is_bull_engulf  = current_scripts[i][12]
-                lowest_low_5    = current_scripts[i][13]
-                highest_high_10 = current_scripts[i][14]
-                # chỉ báo hôm qua
-                prev_volume = prev_scripts[i][0]
+                bb_middle       = current_scripts[i][7]
+                bb_upper        = current_scripts[i][8]  
+                rsi             = current_scripts[i][9]
+                macd_hist       = current_scripts[i][10]
+                macd_line       = current_scripts[i][11]
+                sma_vol_20      = current_scripts[i][12]
+                slope_ema20_3   = current_scripts[i][13]
+                slope_sma5_3    = current_scripts[i][14]
+                is_hammer       = current_scripts[i][15]
+                is_bull_engulf  = current_scripts[i][16]
+                lowest_low_5    = current_scripts[i][17]
+                highest_high_5  = current_scripts[i][18]
+                highest_high_10 = current_scripts[i][19]
+                highest_high_20 = current_scripts[i][20]
+                fib_382         = current_scripts[i][21]
+                fib_500         = current_scripts[i][22]
+                fib_618         = current_scripts[i][23]
+                is_upward_wave  = current_scripts[i][24]
+                fib_ext_127     = current_scripts[i][25]
+                fib_ext_161     = current_scripts[i][26]
+                sup             = current_scripts[i][27]
+                res             = current_scripts[i][28]
+                bb_expanding    = current_scripts[i][29]
+                is_accumulation = current_scripts[i][30]
 
-                # ---- KỊCH BẢN ĐẦU TƯ TRỰC TIẾP ----
-                # -----------------------------------
-                # Regime Ticker
-                # -----------------------------------
-                # =======================================================
-                # CỖ MÁY TRẠNG THÁI (STATE MACHINE) CỦA MỘT TRADER ĐÍCH THỰC
-                # Luôn phải kiểm tra VỊ THẾ đầu tiên, KHÔNG ĐƯỢC nhét vào trong kịch bản
-                # =======================================================
+                prev_volume     = prev_scripts[i][0]
+                prev_close      = prev_scripts[i][1]
+                prev_ema20      = prev_scripts[i][3]
+                prev_ema50      = prev_scripts[i][4]
+                prev_macd_hist  = prev_scripts[i][10]
+                prev_macd_line  = prev_scripts[i][11]
 
-                if self.weights[i] > 0: 
-                    # ---------------------------------------------------
-                    # TRẠNG THÁI 1: ĐANG GIỮ HÀNG -> CHỈ QUAN TÂM ĐẾN EXIT
-                    # ---------------------------------------------------
-                    entry_price = self.entry_prices[i] 
+                # ==============================================================
+                # [KỊCH BẢN 1] Cash Position (Override): Bán toàn bộ danh mục khi thị trường sập gãy
+                # ==============================================================
+                is_downtrend_aligned = (ema20 < ema50) and (ema50 < ema200)
+                is_vol_dropping = (slope_sma5_3 < 0) 
 
-                    # Tính mức Risk để chốt lời TP2
-                    stop_loss_level = max(ema50, lowest_low_5 * 0.98)
-                    risk = entry_price - stop_loss_level if entry_price > stop_loss_level else (entry_price * 0.05)
+                # Điều kiện diễn ra: Death Cross (EMA phân kỳ âm) + MACD < 0 + RSI < 50 + Vol cạn kiệt
+                # Hành động: Bán tháo toàn bộ danh mục bất chấp, ngắt mạch mọi kịch bản khác. Chuyển về 100% Cash.
+                if is_downtrend_aligned and (macd_line < 0) and (rsi < 50) and is_vol_dropping and (current_regime == 0):
+                    if getattr(self, 'is_test', False) and self.weights[i] > 0.0:
+                        date_str = self.dates[self.current_step] if getattr(self, 'dates', None) else f'Step {self.current_step}'
+                        ticker_name = self.tickers[i] if getattr(self, 'tickers', None) is not None else str(i)
+                        print(f"[{date_str}] 🚨 CẮT MÁU (Kill Switch) - Ticker: {ticker_name} - Đang giữ {self.weights[i]*100:.0f}% - Bắt buộc xả về 0!")
 
-                    # [SL] Cắt Lỗ
-                    if close < ema50 or close < (lowest_low_5 * 0.98): 
-                        action[i] = 0.0
-                        self.entry_prices[i] = 0.0
-
-                    # [TP1] Chốt đỉnh cũ
-                    elif close >= highest_high_10: 
-                        action[i] = 0.0
-                        self.entry_prices[i] = 0.0
-
-                    # [TP2] Chốt R:R 1:2
-                    elif close >= (entry_price + 2 * risk): 
-                        action[i] = 0.0
-                        self.entry_prices[i] = 0.0
-
-                    # [TP3] Trailing Stop thủng EMA20
-                    elif close < ema20: 
-                        action[i] = 0.0
-                        self.entry_prices[i] = 0.0
-
-                    # Chưa thoả mãn gì thì ép gồng lãi tiếp
-                    else:
-                        action[i] = max(action[i], self.weights[i])
-
-                else:
-                    # ---------------------------------------------------
-                    # TRẠNG THÁI 2: CHƯA CÓ HÀNG -> TÌM ĐIỂM MUA VÀ LỌC LỆNH AI
-                    # ---------------------------------------------------
-                    is_buy_signal = False
-
-                    # QUÉT CÁC KỊCH BẢN KỸ THUẬT
-                    if current_regime == 2: # Chỉ săn mồi khi đang Bull
-                        if (ema20 > ema50) and (close > ema50) and (slope_ema20_3 > 0):
-                            if (low <= ema20) and (40 <= rsi <= 55) and (is_bull_engulf == 1.0 or is_hammer == 1.0) and (volume > prev_volume):
-                                is_buy_signal = True 
-                                print(f"[{self.tickers[i]}] EMA Pullback Triggered!")
-
-                    # BỘ LỌC CẮT LỚP AI (Tôn trọng tuyệt đối quyết định tỷ trọng của AI)
-                    if is_buy_signal == True:
-                        if action[i] > 0.0:
-                            # AI MỞ LỆNH: Cứ để nguyên biến action[i] của AI, không gán = 0.2 nữa. 
-                            # Bạn chỉ cần thực hiện ghi chép sổ sách:
-                            self.entry_prices[i] = close 
-                        else:
-                            # AI TỪ CHỐI MỞ LỆNH: Kịch bản đẹp nhưng AI chê.
-                            # Vì bạn nói "không cần bổ sung vào", ta sẽ Tôn trọng AI tuyệt đối -> Bỏ qua mã này!
-                            action[i] = 0.0
-                    else:
-                        # KỊCH BẢN KHÔNG THỎA MÃN: Bất chấp AI có thèm mua, Tước quyền giải ngân!
-                        action[i] = 0.0
-
-            conviction = np.max(action)
-            investment_ratio = conviction / CONFIG.CASH_CONVICTION_THRESHOLD if conviction < CONFIG.CASH_CONVICTION_THRESHOLD else 1.0 
-
-            action = action / (np.sum(action) + 1e-9)
-            action = action * investment_ratio 
-
-            cost = self.cost_rate * np.sum(np.abs(action - self.weights))
-            self.weights = action
-
-            end_step = min(self.current_step + self.step_size, self.n_steps)
-            days_held = end_step - self.current_step
-
-            if days_held == 0:
-                return self._get_obs(), 0, True, False, {}
-
-            daily_portfolio_returns = []
-            cum_ret_since_rebalance = 0.0
-            is_cash_mode = False
-
-            for t in range(self.current_step, end_step):
-                if is_cash_mode:
-                    daily_portfolio_returns.append(0.0)
+                    action[i] = 0.0
+                    self.entry_scenarios[i] = 0
+                    self.entry_stages[i] = 0
+                    self.entry_prices[i] = 0.0
                     continue
 
-                daily_ret = np.sum(self.weights * self.returns_arr[t])
-                if t == self.current_step:
-                    daily_ret -= cost
+                # =======================================================
+                # KHU VỰC 1: XỬ LÝ LỆNH ĐANG NẮM GIỮ (QUẢN TRỊ RỦI RO / EXIT)
+                # =======================================================
+                if self.weights[i] > 0: 
+                    scenario_id = self.entry_scenarios[i]
+                    entry_price = self.entry_prices[i]
+                    stage = self.entry_stages[i]
 
-                daily_portfolio_returns.append(daily_ret)
-                cum_ret_since_rebalance = (1 + cum_ret_since_rebalance) * (1 + daily_ret) - 1
-                days_since_buy = t - self.current_step
+                    if scenario_id == 2:
+                        # [EXIT] Kịch bản 2: EMA Pullback
+                        # Stoploss: Gãy đường EMA50 hoặc gãy đáy 5 phiên (lowest_low_5 * 0.98), hoặc đảo chiều EMA (Death Cross)
+                        # Take Profit: Chốt lời chủ động khi chạm cản động (highest_high_10) hoặc Target giá (Entry + 2*Risk)
+                        risk = entry_price - ema50 if entry_price > ema50 else (entry_price * 0.05)
+                        if stage == 1:
+                            is_green_confirm = (close > prev_close) and (close > ema20)
+                            is_broken_with_vol = (close < ema50) and (volume > sma_vol_20)
+                            if is_broken_with_vol: action[i] = self.weights[i] # Lủng EMA vol lớn -> Hủy mua thêm, chờ cắt
+                            elif is_green_confirm: action[i], self.entry_stages[i] = self.weights[i] * (1.0 / 0.3), 2 # Nhồi thêm đủ 100% khi xác nhận xanh
+                            else: action[i] = self.weights[i]
+                        elif stage == 2:
+                            is_macd_dead_cross = (macd_hist < 0) and (prev_macd_hist >= 0)
+                            is_ema_dead_cross = (ema20 < ema50) and (prev_ema20 >= prev_ema50)
+                            if close < ema50 or close < (lowest_low_5 * 0.98): action[i], self.entry_scenarios[i] = 0.0, 0
+                            elif close >= highest_high_10: action[i], self.entry_scenarios[i] = 0.0, 0
+                            elif close >= (entry_price + 2 * risk): action[i], self.entry_scenarios[i] = 0.0, 0
+                            elif is_ema_dead_cross: action[i], self.entry_scenarios[i] = 0.0, 0
+                            else: action[i] = self.weights[i]
 
-                # Ngắt mạch cắt lỗ chốt lời theo T+2
-                if days_since_buy >= CONFIG.T_PLUS_SETTLEMENT:
-                    if cum_ret_since_rebalance <= CONFIG.STOP_LOSS_THRESHOLD or cum_ret_since_rebalance >= CONFIG.TAKE_PROFIT_THRESHOLD:
-                        exit_cost = self.cost_rate * np.sum(self.weights)
-                        daily_portfolio_returns[-1] -= exit_cost 
-                        self.weights = np.zeros(self.weights_dim) 
-                        is_cash_mode = True 
+                    elif scenario_id == 3:
+                        # [EXIT] Kịch bản 3: Fibonacci Pullback
+                        # Stoploss: Thủng đường mốc Fibo vàng 0.618
+                        # Take Profit: Chốt toàn bộ khi chạm Fibo Extension 1.618 hoặc kháng cự ngắn hạn
+                        is_green_candle = close > current_scripts[i][2]
+                        if stage == 1:
+                            if close < fib_618: action[i] = self.weights[i]
+                            elif is_green_candle and close > entry_price: action[i], self.entry_stages[i] = self.weights[i] * (1.0 / 0.3), 2 # Gia tăng đủ 100%
+                            else: action[i] = self.weights[i]
+                        elif stage == 2:
+                            if close < fib_618: action[i], self.entry_scenarios[i], self.entry_stages[i] = 0.0, 0, 0
+                            elif close >= fib_ext_161 or close >= highest_high_10: action[i], self.entry_scenarios[i], self.entry_stages[i] = 0.0, 0, 0
+                            else: action[i] = self.weights[i]
 
-            daily_portfolio_returns = np.array(daily_portfolio_returns)
-            cum_return = np.prod(1 + daily_portfolio_returns) - 1
+                    elif scenario_id == 4:
+                        # [EXIT] Kịch bản 4: Support Bounce (Bật đáy Hỗ trợ)
+                        # Stoploss: Giá lủng hỗ trợ cứng Sup()
+                        # Take Profit: Về lại kháng cự đỉnh 10 phiên (Highest_high) hoặc đường EMA50
+                        if close < sup * 0.98: action[i], self.entry_scenarios[i], self.entry_prices[i] = 0.0, 0, 0.0
+                        elif close >= highest_high_10 or close >= ema50: action[i], self.entry_scenarios[i], self.entry_prices[i] = 0.0, 0, 0.0
+                        else: action[i] = self.weights[i]
 
-            mean_ret = np.mean(daily_portfolio_returns)
-            std_ret = np.std(daily_portfolio_returns) + 1e-9
-            sharpe = (mean_ret / std_ret) * np.sqrt(252) 
+                    elif scenario_id == 5:
+                        # [EXIT] Kịch bản 5: Range Trading (Đi ngang hộp Darvas)
+                        # Stoploss: Gãy nền hỗ trợ của hộp (Sup * 0.98)
+                        # Take Profit: Chạm cản trên (Kháng cự biên hộp Res)
+                        if close < sup * 0.98: action[i] = 0.0
+                        elif close >= res: action[i] = 0.0
+                        else: action[i] = self.weights[i]
 
-            reward = sharpe + CONFIG.PENALTY_FOR_LOSS if cum_return < 0 else sharpe
+                    elif scenario_id == 6:
+                        # [EXIT] Kịch bản 6: RSI Oversold in BULL
+                        # Stoploss: Lủng đường xương sống EMA50
+                        # Take Profit: Hồi chữ V chạm đỉnh cao 20 phiên
+                        if close < ema50: action[i], self.entry_scenarios[i], self.entry_prices[i] = 0.0, 0, 0.0
+                        elif close >= highest_high_20: action[i], self.entry_scenarios[i], self.entry_prices[i] = 0.0, 0, 0.0
+                        else: action[i] = self.weights[i]
 
-            self.current_step = end_step
+                    elif scenario_id == 7 or scenario_id == 8:
+                        # [EXIT] Kịch bản 7 & 8: Trend Ride / Breakout
+                        # Stoploss: Quay đầu thủng lại đỉnh cũ (False Breakout - Âm 3%)
+                        # Take Profit: Target mốc Fibo Extension 1.27 / 1.618
+                        if stage == 1:
+                            is_retest_success = (low <= res) and (close > res) and (volume < sma_vol_20)
+                            is_breakout_runaway = (close > res * 1.05)
+                            if is_retest_success: 
+                                action[i], self.entry_stages[i] = self.weights[i] * (1.0 / 0.4), 2 # Nhồi nốt 60%
+                            elif is_breakout_runaway:
+                                action[i] = self.weights[i] # Giữ 40% k mua đuổi
+                            else:
+                                action[i] = self.weights[i]
+                            if close < res * 0.97: action[i] = 0.0
+                        elif stage == 2:
+                            if close < res * 0.97: action[i] = 0.0
+                            elif close >= fib_ext_127: action[i] = 0.0
+                            else: action[i] = self.weights[i]
+
+                    elif scenario_id == 9:
+                        # [EXIT] Kịch bản 9: Bollinger Mean Reversion
+                        # Stoploss: BB co thắt nhưng mở biên rớt xuống (Expanding), hoặc thủng BB_lower * 0.98
+                        # Take Profit: Quét 50% ở trục giữa (BB_Middle), 50% còn lại ở biên trên (BB_Upper)
+                        if (bb_expanding == 1.0 and close < bb_lower) or (close < bb_lower * 0.98): action[i] = 0.0
+                        elif stage == 1:
+                            if close > bb_lower: action[i], self.entry_stages[i] = max(action[i], 1.0), 2
+                            else: action[i] = self.weights[i]
+                        elif stage == 2:
+                            if close >= bb_upper: action[i] = 0.0
+                            elif close >= bb_middle: action[i], self.entry_stages[i] = self.weights[i] * 0.5, 3
+                            else: action[i] = self.weights[i]
+                        elif stage == 3:
+                            if close >= bb_upper: action[i] = 0.0
+                            else: action[i] = self.weights[i]
+
+                    elif scenario_id == 10:
+                        # [EXIT] Kịch bản 10: RSI Swing
+                        # Stoploss: Thủng hộp hỗ trợ âm 2% (Sup * 0.98)
+                        # Take Profit: Chỉ báo RSI tiến lên vùng quá mua (> 70)
+                        if close < sup * 0.98: action[i] = 0.0
+                        elif rsi > 70: action[i] = 0.0
+                        else: action[i] = self.weights[i]
+
+                    elif scenario_id == 11:
+                        # [EXIT] Kịch bản 11: Bollinger + MACD Crossover
+                        # Stoploss: Lủng dải dưới BB_Lower * 0.98
+                        # Take Profit: Ăn nhịp bứt dải biên trên (BB_Upper)
+                        if close < bb_lower * 0.98: action[i] = 0.0
+                        elif close >= bb_upper: action[i] = 0.0
+                        else: action[i] = self.weights[i]
+
+                    elif scenario_id == 12:
+                        # [EXIT] Kịch bản 12: MACD Zero Line Bounce
+                        # Stoploss: Đâm thủng trục 0 (Histogram < 0) HOẶC xu hướng yếu (EMA cắt xuống)
+                        if (macd_hist < 0 and prev_macd_line >= 0) or (ema20 < ema50 and prev_ema20 >= prev_ema50): action[i], self.entry_scenarios[i], self.entry_prices[i] = 0.0, 0, 0.0
+                        else: action[i] = self.weights[i]
+
+                    elif scenario_id == 13:
+                        # [EXIT] Kịch bản 13: Golden Cross (Giao cắt vàng)
+                        # Stoploss: Giao cắt báo ảo chết yểu (Histogram âm) hoặc tự giao cắt ngược lại thành Dead Cross
+                        if (macd_hist < 0 and prev_macd_line >= 0) or (ema20 < ema50 and prev_ema20 >= prev_ema50): action[i], self.entry_scenarios[i], self.entry_prices[i] = 0.0, 0, 0.0
+                        else: action[i] = self.weights[i]
+
+                    elif scenario_id == 14:
+                        # [EXIT] Kịch bản 14: Oversold Reversal (Phân kỳ Dương)
+                        # Stoploss: Gãy đáy cũ tạo mô hình mới (âm 4% từ điểm mua)
+                        # Take Profit: Hồi chữ V chạm đường trung bình EMA20
+                        if close < entry_price * 0.96: action[i] = 0.0
+                        elif close >= ema20: action[i] = 0.0
+                        else: action[i] = self.weights[i]
+
+                    elif scenario_id == 15:
+                        # [EXIT] Kịch bản 15: Falling Wedge Breakout (Nêm giảm)
+                        # Stoploss: Xuyên thủng đáy của cái nêm (Sup)
+                        # Take Profit: Theo nguyên lý chiều cao kỹ thuật của Nêm
+                        target_price = entry_price + (res - sup)
+                        if close < sup: action[i] = 0.0
+                        elif close >= target_price: action[i] = 0.0
+                        else: action[i] = self.weights[i]
+
+                    elif scenario_id == 16:
+                        # [EXIT] Kịch bản 16: Dead Cat Bounce (Nảy mèo chết / Panic)
+                        # Stoploss: Kỷ luật sắt thép khi hàng T+2 vi phạm 3%
+                        # Take Profit: Chốt nhanh bảo toàn vốn khi lãi đạt mốc trung bình 7%
+                        if close < entry_price * 0.97: action[i] = 0.0
+                        elif close >= entry_price * 1.07: action[i] = 0.0
+                        else: action[i] = self.weights[i]
+
+                    else:
+                        action[i] = 0.0
+                        self.entry_scenarios[i] = 0
+
+                    if getattr(self, 'is_test', False) and action[i] == 0.0 and self.weights[i] > 0.0:
+                        date_str = self.dates[self.current_step] if getattr(self, 'dates', None) else f'Step {self.current_step}'
+                        ticker_name = self.tickers[i] if getattr(self, 'tickers', None) is not None else str(i)
+                        pnl_pct = ((close / entry_price) - 1.0) * 100
+                        print(f"[{date_str}] 📉 BÁN (Thoát Kịch bản {int(scenario_id)}) - Ticker: {ticker_name} - Giá bán: {close:.2f} - Hiệu suất: {pnl_pct:+.2f}%")
+
+                # =======================================================
+                # KHU VỰC 2: TÌM KIẾM ĐIỂM VÀO LỆNH (MUA MỚI / ENTRY)
+                # =======================================================
+                else:
+                    is_bought = False
+                    is_macd_bullish_divergence = (low < sup) and (macd_hist > 0 and prev_macd_hist <= 0)
+
+                    if action[i] > 0.0:
+                        # [KỊCH BẢN 2] EMA Pullback: (Regime 2 - Bull Market) Mua khi giá chạm EMA, RSI giảm, nến đảo chiều.
+                        if current_regime == 2 and (ema20 > ema50) and (close > ema50) and (slope_ema20_3 > 0) and (low <= ema20) and (40 <= rsi <= 55) and (is_bull_engulf == 1.0 or is_hammer == 1.0) and (volume > prev_volume):
+                            self.entry_prices[i], self.entry_scenarios[i], self.entry_stages[i], action[i] = close, 2, 1, action[i] * 0.3
+                            is_bought = True
+
+                        # [KỊCH BẢN 3] Fibonacci Pullback: (Regime 2 - Bull Market) Mua khi giá hồi về vùng Fibo 0.618, có nến rút chân.
+                        elif current_regime == 2 and is_upward_wave == 1.0 and (fib_618 <= close <= fib_382) and (is_hammer == 1.0 or is_bull_engulf == 1.0):
+                            self.entry_prices[i], self.entry_scenarios[i], self.entry_stages[i], action[i] = close, 3, 1, action[i] * 0.3
+                            is_bought = True
+
+                        # [KỊCH BẢN 4] Support Bounce: (Regime 2 - Bull Market) Mua bắt đáy cục bộ tại hỗ trợ, nến đảo chiều, Vol thấp.
+                        elif current_regime == 2 and low <= sup and volume < sma_vol_20 and is_bull_engulf == 1.0:
+                            self.entry_prices[i], self.entry_scenarios[i], action[i] = close, 4, action[i] * 1.0
+                            is_bought = True
+
+                        # [KỊCH BẢN 5] Range Trading: (Regime 1 - Sideway) Mua khi giá đập biên dưới (hỗ trợ) trong hộp Darvas, Vol thấp.
+                        elif current_regime == 1 and is_accumulation == 1.0 and low <= sup and volume < sma_vol_20:
+                            self.entry_prices[i], self.entry_scenarios[i], action[i] = close, 5, action[i] * 1.0
+                            is_bought = True
+
+                        # [KỊCH BẢN 6] RSI Oversold in BULL: (Regime 2 - Bull Market) Mua quá bán cục bộ trong uptrend.
+                        elif current_regime == 2 and ema20 > ema50 and (30 <= rsi <= 40) and low <= ema50 and is_hammer == 1.0:
+                            self.entry_prices[i], self.entry_scenarios[i], action[i] = close, 6, action[i] * 1.0
+                            is_bought = True
+
+                        # [KỊCH BẢN 7] Bollinger Trend Ride: (Regime 2 - Bull Market) Mua bám mép trên Bollinger Band đang mở rộng.
+                        elif current_regime == 2 and bb_expanding == 1.0 and close >= (bb_upper * 0.99) and slope_ema20_3 > 0 and volume > prev_volume:
+                            self.entry_prices[i], self.entry_scenarios[i], self.entry_stages[i], action[i] = close, 7, 1, action[i] * 0.4
+                            is_bought = True
+
+                        # [KỊCH BẢN 8] Breakout Resistance: (Regime 2 - Bull Market) Mua nổ Vol phá đỉnh, vượt kháng cự.
+                        elif current_regime == 2 and is_accumulation == 1.0 and close >= res and volume > (1.5 * sma_vol_20) and macd_hist > 0:
+                            self.entry_prices[i], self.entry_scenarios[i], self.entry_stages[i], action[i] = close, 8, 1, action[i] * 0.4
+                            is_bought = True
+
+                        # [KỊCH BẢN 9] Bollinger Mean Reversion: (Regime 1 - Sideway) Mua khi thủng biên dưới BB trong khi BB đi ngang.
+                        elif current_regime == 1 and bb_expanding == 0.0 and low <= bb_lower and rsi < 30:
+                            self.entry_prices[i], self.entry_scenarios[i], self.entry_stages[i], action[i] = close, 9, 1, action[i] * 0.5
+                            is_bought = True
+
+                        # [KỊCH BẢN 10] RSI Swing: (Regime 1 - Sideway) Mua khi RSI bị nén mạnh ở vùng tích lũy (Quá bán).
+                        elif current_regime == 1 and is_accumulation == 1.0 and rsi < 30 and low <= sup:
+                            self.entry_prices[i], self.entry_scenarios[i], action[i] = close, 10, action[i] * 1.0
+                            is_bought = True
+
+                        # [KỊCH BẢN 11] Bollinger + MACD Crossover: (Regime 1 - Sideway) Mua ở biên dưới BB thắt nút cổ chai kèm MACD phân kỳ dương.
+                        elif current_regime == 1 and bb_expanding == 0.0 and is_accumulation == 1.0 and low <= bb_lower and (macd_hist > 0 and prev_macd_hist <= 0):
+                            self.entry_prices[i], self.entry_scenarios[i], action[i] = close, 11, action[i] * 1.0
+                            is_bought = True
+
+                        # [KỊCH BẢN 12] MACD Zero Line Bounce: (Regime 2 - Bull Market) Mua khi MACD bật nảy từ đường 0.
+                        elif current_regime == 2 and (-0.1 <= macd_line <= 0.1) and macd_hist > 0 and prev_macd_line <= 0:
+                            self.entry_prices[i], self.entry_scenarios[i], action[i] = close, 12, action[i] * 1.0
+                            is_bought = True
+
+                        # [KỊCH BẢN 13] Golden Cross: (Regime 2 - Bull Market) Mua khi xuất hiện giao cắt vàng (EMA20 cắt lên EMA50).
+                        elif current_regime == 2 and close > ema200 and ema20 > ema50 and prev_ema20 <= prev_ema50 and macd_line > 0:
+                            self.entry_prices[i], self.entry_scenarios[i], action[i] = close, 13, action[i] * 1.0
+                            is_bought = True
+
+                        # [KỊCH BẢN 14] Oversold Reversal: (Regime 0 - Downtrend) Mua khi rớt mạnh nhưng MACD tạo phân kỳ dương.
+                        elif current_regime == 0 and slope_sma5_3 < 0 and rsi < 25 and is_macd_bullish_divergence:
+                            self.entry_prices[i], self.entry_scenarios[i], action[i] = close, 14, action[i] * 1.0
+                            is_bought = True
+
+                        # [KỊCH BẢN 15] Falling Wedge Breakout: (Regime 0 - Downtrend) Mua khi phá cản chéo (nêm giảm) với khối lượng lớn.
+                        elif current_regime == 0 and (close > res) and (volume > 1.5 * sma_vol_20) and (close != low):
+                            self.entry_prices[i], self.entry_scenarios[i], action[i] = close, 15, action[i] * 1.0
+                            is_bought = True
+
+                        # [KỊCH BẢN 16] Dead Cat Bounce: (Regime 0 - Downtrend) Bắt đáy chớp nhoáng (cú nảy mèo chết) khi giá rơi tự do, RSI < 20.
+                        elif current_regime == 0 and rsi < 20 and is_hammer == 1.0 and volume > sma_vol_20 and (close != low):
+                            self.entry_prices[i], self.entry_scenarios[i], action[i] = close, 16, action[i] * 1.0
+                            is_bought = True
+
+                    if not is_bought:
+                        action[i] = 0.0
+                    else:
+                        if getattr(self, 'is_test', False):
+                            date_str = self.dates[self.current_step] if getattr(self, 'dates', None) else f'Step {self.current_step}'
+                            ticker_name = self.tickers[i] if getattr(self, 'tickers', None) is not None else str(i)
+                            print(f"[{date_str}] 🚀 MUA MỚI (Kịch bản {int(self.entry_scenarios[i])}) - Ticker: {ticker_name} - Giá mua: {close:.2f} - Giải ngân: {action[i]*100:.0f}%")
+
+
+            action_sum = np.sum(action)
+            if action_sum > 0:
+                action = action / action_sum
+            else:
+                action = np.zeros_like(action)
+
+            turnover = np.sum(np.abs(action - self.weights))
+            cost = self.cost_rate * turnover
+
+            self.prev_weights = self.weights.copy()
+            self.weights = action
+
+            market_ret = np.mean(self.returns_arr[self.current_step])
+            daily_ret = np.sum(self.weights * self.returns_arr[self.current_step]) - cost
+
+            self.current_portfolio_value = self.current_portfolio_value * (1 + daily_ret)
+
+            if daily_ret < 0:
+                reward = daily_ret * getattr(CONFIG, 'REWARD_LOSS_MULT', 200)
+            else:
+                reward = daily_ret * getattr(CONFIG, 'REWARD_WIN_MULT', 100)
+
+            alpha = daily_ret - market_ret
+            if alpha > 0:
+                reward += alpha * getattr(CONFIG, 'REWARD_ALPHA_MULT', 50)
+
+            if action_sum == 0.0 and market_ret < 0:
+                reward += abs(market_ret) * getattr(CONFIG, 'REWARD_CASH_CRASH_MULT', 100)
+
+            turnover_penalty = turnover * getattr(CONFIG, 'TURNOVER_PENALTY_RATE', 0.1)
+            reward -= turnover_penalty
+
+            vol_ratio = current_scripts[:, 0] / (current_scripts[:, 12] + 1e-9)
+            liquidity_bonus = np.sum(self.weights * vol_ratio) * getattr(CONFIG, 'LIQUIDITY_BONUS_RATE', 0.02)
+            reward += liquidity_bonus
+
+            num_active_positions = np.sum(self.weights > 0.05)
+            reward -= (num_active_positions * getattr(CONFIG, 'PENALTY_OVER_DIVERSIFICATION', 0.01))
+
+            if self.current_portfolio_value > self.high_watermark:
+                self.high_watermark = self.current_portfolio_value
+            else:
+                drawdown = (self.high_watermark - self.current_portfolio_value) / self.high_watermark
+                reward -= drawdown * getattr(CONFIG, 'DRAWDOWN_PENALTY_RATE', 2.0)
+
+            if getattr(self, 'is_test', False):
+                date_str = self.dates[self.current_step] if getattr(self, 'dates', None) else f'Step {self.current_step}'
+                if action_sum > 0.0 or daily_ret != 0.0:
+                    allocations = [f"{self.tickers[k]}: {self.weights[k]*100:.0f}%" for k in range(self.weights_dim) if self.weights[k] > 0.01]
+                    alloc_str = ", ".join(allocations) if allocations else "100% Cash"
+                    print(f"[{date_str}] 📊 TỔNG KẾT: Danh mục [{alloc_str}] | Lãi/Lỗ phiên: {daily_ret*100:+.2f}% | Điểm AI: {reward:+.1f}")
+
+            self.current_step += 1
             done = self.current_step >= self.n_steps - 1 
 
-            return self._get_obs(), float(reward), done, False, {'net_return': cum_return}
+            return self._get_obs(), float(reward), done, False, {'net_return': daily_ret}
 
 
 # ## MẠNG NƠ-RON TRÍ TUỆ NHÂN TẠO (NEURAL NETWORK STRUCTURE)
 
 # ## Đây là "Bộ Não" thực sự của AI. Mạng Nơ-ron này chịu trách nhiệm Đọc dữ liệu (Extractor).
 
-# In[37]:
+# In[47]:
 
 
 class AdvancedTickerExtractor(BaseFeaturesExtractor):
@@ -445,85 +751,106 @@ class AdvancedTickerExtractor(BaseFeaturesExtractor):
         return global_features
 
 
-# In[ ]:
+# In[48]:
 
 
 def walk_forward_train_test(returns_df, ai_features_df, strategies_features_df, weights_dim, tickers, num_strategies_features):
-    print("\n[LUẬT 4] KHỞI ĐỘNG WALK-FORWARD VALIDATION (CHỐNG HỌC VẸT)...")
+    print("\n[LUẬT 4] KHỞI ĐỘNG HỆ THỐNG CONTINUAL LEARNING (ROLLING WINDOW)...")
 
     total_days = len(returns_df)
-    chunk_size = total_days // CONFIG.WALK_FORWARD_SPLITS
+    train_window = getattr(CONFIG, 'TRAIN_WINDOW', 252)
+    test_window = getattr(CONFIG, 'TEST_WINDOW', 21)
 
-    # Chia dữ liệu: Trong Fold 1, Học từ Khúc 0 đến Khúc 2, Thi đấu Khúc 2 đến Cuối cùng
-    folds = [
-        (0, chunk_size * 2, chunk_size * 2, total_days) 
-    ]
+    current_start = 0
+    fold_idx = 1
 
-    # Gắn Não (Neural Network) vào Trái Tim (PPO Algorithm)
+    model = None
+
     policy_kwargs = dict(
         features_extractor_class=AdvancedTickerExtractor,
         features_extractor_kwargs=dict(features_dim=256),
     )
 
-    for fold_idx, (train_start, train_end, test_start, test_end) in enumerate(folds):
+    all_test_returns = []
+
+    while current_start + train_window < total_days:
+        train_start = current_start
+        train_end = current_start + train_window
+        test_start = train_end
+        test_end = min(test_start + test_window, total_days)
+
+        if test_end - test_start < 2:
+            break
+
         print(f"\n=======================================================")
-        print(f"--- FOLD {fold_idx + 1}: HỌC TỪ NGÀY {train_start}->{train_end}, THI ĐẤU NGÀY {test_start}->{test_end} ---")
+        print(f"--- CHU KỲ {fold_idx}: HỌC {dates[train_start]} -> {dates[train_end-1]} | THỰC CHIẾN: {dates[test_start]} -> {dates[test_end-1]} ---")
 
-        # Dữ liệu Train
         returns_train = returns_df.iloc[train_start:train_end]
-        features_train = features_df.iloc[train_start:train_end]
+        ai_train = ai_features_df.iloc[train_start:train_end]
+        strategies_train = strategies_features_df.iloc[train_start:train_end]
+        dates_train = dates[train_start:train_end]
 
-        # Dữ liệu Test (Tương lai chưa biết)
         returns_test = returns_df.iloc[test_start:test_end]
-        features_test = features_df.iloc[test_start:test_end]
+        ai_test = ai_features_df.iloc[test_start:test_end]
+        strategies_test = strategies_features_df.iloc[test_start:test_end]
+        dates_test = dates[test_start:test_end]
 
-        # Tạo Sàn Chứng Khoán Giả lập cho quá trình Học
-        train_env = DummyVecEnv([lambda: AdvancedPortfolioEnv(returns_train, features_train, weights_dim)])
+        train_env = DummyVecEnv([lambda: AdvancedPortfolioEnv(
+            returns_train, ai_train, strategies_train, weights_dim, num_strategies_features, tickers=tickers, dates=dates_train
+        )])
 
-        # Khởi tạo Mô hình Trí tuệ Nhân tạo - Sử dụng Giải thuật PPO (Thuật toán số 1 hiện nay cho Trading)
-        model = PPO("MlpPolicy", train_env, 
-                    policy_kwargs=policy_kwargs, 
-                    verbose=1, # Bật hiển thị Log lúc Học để theo dõi sức khỏe AI (loss, entropy...)
-                    n_steps=1024,
-                    learning_rate=0.0003,
-                    ent_coef=CONFIG.ENT_COEF,
-                    batch_size=64)
+        if model is None:
+            print("Khởi tạo Mạng Nơ-ron AI hoàn toàn mới...")
+            model = PPO("MlpPolicy", train_env, 
+                        policy_kwargs=policy_kwargs, 
+                        verbose=1, 
+                        n_steps=1024,
+                        learning_rate=0.00005,
+                        ent_coef=CONFIG.ENT_COEF,
+                        batch_size=90)
+        else:
+            print("Nạp kiến thức cũ, chuyển Sàn môi trường để học tiếp (Continual Learning)...")
+            model.set_env(train_env)
 
         print(f"Đang huấn luyện mô hình ({CONFIG.TRAINING_TIMESTEPS} steps)...")
-        # Kích hoạt quá trình Học tập
         model.learn(total_timesteps=CONFIG.TRAINING_TIMESTEPS)
+
+        model.save(getattr(CONFIG, 'SAVE_MODEL_PATH', "AI_Brain_Current.zip"))
 
         print(f"Đang chạy Backtest thực chiến (CÓ TÍNH PHÍ GIAO DỊCH {CONFIG.COST_RATE * 100}%)...")
         print("-------------------------------------------------------")
 
-        # Tạo Sàn Chứng Khoán Thật cho quá trình Thi Đấu (is_test=True để in Log)
-        test_env = DummyVecEnv([lambda: AdvancedPortfolioEnv(returns_test, features_test, weights_dim, tickers=tickers, is_test=True)])
+        test_env = DummyVecEnv([lambda: AdvancedPortfolioEnv(
+            returns_test, ai_test, strategies_test, weights_dim, num_strategies_features, tickers=tickers, dates=dates_test, is_test=True
+        )])
         obs = test_env.reset()
 
-        portfolio_returns = []
-        done = False
-
-        # Vòng lặp Thi đấu: Từ Ngày đầu tiên của Tương lai đến Ngày cuối cùng
-        while not done:
-            # AI tự nhìn Biểu đồ và Quyết định Xuống tiền
-            action, _ = model.predict(obs, deterministic=True)
-            # Hệ thống ghi nhận Quyết định, trừ Tiền Phí và Phản hồi Kết Quả (Lãi/Lỗ)
+        done = [False]
+        fold_returns = []
+        while not done[0]:
+            action, _states = model.predict(obs, deterministic=True)
             obs, reward, done, info = test_env.step(action)
-
-            # Ghi chép Lợi nhuận
             if 'net_return' in info[0]:
-                portfolio_returns.append(info[0]['net_return'])
-
-        # Tổng kết Kì thi
-        test_len = len(returns_test)
-        cum_ret = (np.prod(1 + np.array(portfolio_returns)) - 1) * 100
-        print(f"=> [KẾT QUẢ] LỢI NHUẬN TÍCH LŨY FOLD {fold_idx + 1} (SAU {test_len} NGÀY THỰC CHIẾN): {cum_ret:.2f}%")
-
-if __name__ == "__main__":
-    returns_df, ai_features_df, strategies_features_df, weights_dim, tickers, num_strategies_features = load_data()
-    walk_forward_train_test(returns_df, ai_features_df, strategies_features_df, weights_dim, tickers, num_strategies_features)
+                all_test_returns.append(info[0]['net_return'])
+                fold_returns.append(info[0]['net_return'])
 
 
-# ## LUẬT 4: WALK-FORWARD VALIDATION (CHỐNG HỌC VẸT)
+        # Tính lợi nhuận lũy kế cho chu kỳ hiện tại
+        fold_profit = (np.prod(1 + np.array(fold_returns)) - 1) * 100
+        print(f"💰 KẾT QUẢ CHU KỲ {fold_idx}: Lợi nhuận thực chiến = {fold_profit:+.2f}%")
+        print("="*55 + "\n")
+        current_start += test_window
+        fold_idx += 1
 
-# ## Đạo diễn toàn bộ quá trình: Chia dữ liệu -> Gọi AI vào Học (Train) -> Bắt AI đi Thi (Test) -> Báo cáo Lợi nhuận
+
+    total_profit = (np.prod(1 + np.array(all_test_returns)) - 1) * 100
+    print(f"\n🏆 TỔNG LỢI NHUẬN BACKTEST TOÀN BỘ THỜI GIAN: {total_profit:+.2f}%")
+    print(f"\nĐã lưu bộ não AI mới nhất vào {getattr(CONFIG, 'SAVE_MODEL_PATH', 'AI_Brain_Current.zip')}. Có thể dùng trực tiếp cho Live Trading ngày mai!")
+
+
+# In[ ]:
+
+
+returns_df, ai_features_df, strategies_features_df, weights_dim, tickers, num_strategies_features, dates = load_data()
+walk_forward_train_test(returns_df, ai_features_df, strategies_features_df, weights_dim, tickers, num_strategies_features)
+
