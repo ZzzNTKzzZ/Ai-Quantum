@@ -1,0 +1,222 @@
+from stable_baselines3.common.vec_env import VecNormalize
+print("\n[LUẬT 4] KHỞI ĐỘNG HỆ THỐNG HUẤN LUYỆN...")
+
+TRAINING_MODE = getattr(CONFIG, 'TRAINING_MODE', 'fast_split') # 'fast_split' or 'rolling_window'
+
+total_days = len(returns_df)
+
+model = None
+
+policy_kwargs = dict(
+    features_extractor_class=AdvancedTickerExtractor,
+    features_extractor_kwargs=dict(features_dim=256),
+)
+
+all_test_returns = []
+
+if TRAINING_MODE == 'fast_split':
+    print(f"\n=======================================================")
+    print(f"--- CHẾ ĐỘ HỌC NHANH (FAST SPLIT: 70% Train, 15% Val, 15% Test) ---")
+    
+    train_ratio = 0.7
+    val_ratio = 0.15
+    
+    train_end = int(total_days * train_ratio)
+    val_end = int(total_days * (train_ratio + val_ratio))
+    
+    returns_train = returns_df.iloc[:train_end]
+    ai_train = ai_features_df.iloc[:train_end]
+    strategies_train = strategies_features_df.iloc[:train_end]
+    dates_train = dates[:train_end]
+    
+    returns_val = returns_df.iloc[train_end:val_end]
+    ai_val = ai_features_df.iloc[train_end:val_end]
+    strategies_val = strategies_features_df.iloc[train_end:val_end]
+    dates_val = dates[train_end:val_end]
+    
+    returns_test = returns_df.iloc[val_end:]
+    ai_test = ai_features_df.iloc[val_end:]
+    strategies_test = strategies_features_df.iloc[val_end:]
+    dates_test = dates[val_end:]
+    
+    train_env = DummyVecEnv([lambda: AdvancedPortfolioEnv(
+        returns_train, ai_train, strategies_train, weights_dim, num_strategies_features, tickers=tickers, dates=dates_train
+    )])
+    train_env = VecNormalize(train_env, norm_obs=False, norm_reward=True, clip_reward=10.0)
+    
+    print(f"Khởi tạo Mạng Nơ-ron AI (Train: {len(dates_train)} days, Val: {len(dates_val)} days, Test: {len(dates_test)} days)...")
+    model = PPO("MlpPolicy", train_env, 
+                policy_kwargs=policy_kwargs, 
+                verbose=1, 
+                n_steps=1024,
+                learning_rate=0.00005,
+                ent_coef=CONFIG.ENT_COEF,
+                batch_size=90)
+                
+    print("\n[CURRICULUM LEARNING] Bắt đầu huấn luyện theo từng cấp độ độ trễ (T+0 -> T+1 -> T+3)...")
+
+                
+    CONFIG.T_PLUS_SETTLEMENT = 0
+
+                
+    print("Giai đoạn 1: Huấn luyện với T+0 (100,000 steps)...")
+
+                
+    model.learn(total_timesteps=10000, reset_num_timesteps=False)
+
+                
+    CONFIG.T_PLUS_SETTLEMENT = 1
+
+                
+    print("Giai đoạn 2: Huấn luyện với T+1 (100,000 steps)...")
+
+                
+    model.learn(total_timesteps=10000, reset_num_timesteps=False)
+
+                
+    CONFIG.T_PLUS_SETTLEMENT = 3
+
+                
+    print("Giai đoạn 3: Huấn luyện với T+3 (300,000 steps)...")
+
+                
+    model.learn(total_timesteps=30000, reset_num_timesteps=False)
+    
+    model.save(getattr(CONFIG, 'SAVE_MODEL_PATH', "AI_Brain_v8.zip"))
+    train_env.save("vec_normalize.pkl")
+    
+    print(f"\nĐang chạy Backtest trên Test Set (CÓ TÍNH PHÍ GIAO DỊCH {CONFIG.COST_RATE * 100}%)...")
+    print("-------------------------------------------------------")
+    
+    test_env = DummyVecEnv([lambda: AdvancedPortfolioEnv(
+        returns_test, ai_test, strategies_test, weights_dim, num_strategies_features, tickers=tickers, dates=dates_test, is_test=True
+    )])
+    test_env = VecNormalize.load("vec_normalize.pkl", test_env)
+    test_env.training = False
+    test_env.norm_reward = False
+    obs = test_env.reset()
+    
+    done = [False]
+    while not done[0]:
+        action, _states = model.predict(obs, deterministic=True)
+        obs, reward, done, info = test_env.step(action)
+        if 'net_return' in info[0]:
+            all_test_returns.append(info[0]['net_return'])
+            
+    total_profit = (np.prod(1 + np.array(all_test_returns)) - 1) * 100
+    print(f"\n🏆 TỔNG LỢI NHUẬN TEST SET: {total_profit:+.2f}%")
+    
+elif TRAINING_MODE == 'rolling_window':
+    train_window = getattr(CONFIG, 'TRAIN_WINDOW', 252)
+    test_window = getattr(CONFIG, 'TEST_WINDOW', 21)
+    
+    current_start = 0
+    fold_idx = 1
+    
+    while current_start + train_window < total_days:
+        train_start = current_start
+        train_end = current_start + train_window
+        test_start = train_end
+        test_end = min(test_start + test_window, total_days)
+        
+        if test_end - test_start < 2:
+            break
+            
+        print(f"\n=======================================================")
+        print(f"--- CHU KỲ {fold_idx}: HỌC {dates[train_start]} -> {dates[train_end-1]} | THỰC CHIẾN: {dates[test_start]} -> {dates[test_end-1]} ---")
+        
+        returns_train = returns_df.iloc[train_start:train_end]
+        ai_train = ai_features_df.iloc[train_start:train_end]
+        strategies_train = strategies_features_df.iloc[train_start:train_end]
+        dates_train = dates[train_start:train_end]
+        
+        returns_test = returns_df.iloc[test_start:test_end]
+        ai_test = ai_features_df.iloc[test_start:test_end]
+        strategies_test = strategies_features_df.iloc[test_start:test_end]
+        dates_test = dates[test_start:test_end]
+        
+        train_env = DummyVecEnv([lambda: AdvancedPortfolioEnv(
+            returns_train, ai_train, strategies_train, weights_dim, num_strategies_features, tickers=tickers, dates=dates_train
+        )])
+        
+        if model is None:
+            print("Khởi tạo Mạng Nơ-ron AI hoàn toàn mới...")
+            train_env = VecNormalize(train_env, norm_obs=False, norm_reward=True, clip_reward=10.0)
+            model = PPO("MlpPolicy", train_env, 
+                policy_kwargs=policy_kwargs, 
+                verbose=1, 
+                n_steps=1024,
+                learning_rate=0.00005,
+                ent_coef=CONFIG.ENT_COEF,
+                batch_size=90,
+                use_sde=True,          # Bật SDE
+                sde_sample_freq=4      # Đổi hướng khám phá 4 ngày 1 lần (khoảng 1 tuần giao dịch)
+               )
+        else:
+            print("Nạp kiến thức cũ, chuyển Sàn môi trường để học tiếp (Continual Learning)...")
+            train_env = VecNormalize.load("vec_normalize.pkl", train_env)
+            train_env.training = True
+            train_env.norm_reward = True
+            model.set_env(train_env)
+            
+        print("\n[CURRICULUM LEARNING] Bắt đầu huấn luyện theo từng cấp độ độ trễ (T+0 -> T+1 -> T+3)...")
+
+            
+        CONFIG.T_PLUS_SETTLEMENT = 0
+
+            
+        print("Giai đoạn 1: Huấn luyện với T+0 (100,000 steps)...")
+
+            
+        model.learn(total_timesteps=100000, reset_num_timesteps=False)
+
+            
+        CONFIG.T_PLUS_SETTLEMENT = 1
+
+            
+        print("Giai đoạn 2: Huấn luyện với T+1 (100,000 steps)...")
+
+            
+        model.learn(total_timesteps=100000, reset_num_timesteps=False)
+
+            
+        CONFIG.T_PLUS_SETTLEMENT = 3
+
+            
+        print("Giai đoạn 3: Huấn luyện với T+3 (300,000 steps)...")
+
+            
+        model.learn(total_timesteps=300000, reset_num_timesteps=False)
+        
+        model.save(getattr(CONFIG, 'SAVE_MODEL_PATH', "AI_Brain_v8.zip"))
+        train_env.save("vec_normalize.pkl")
+        
+        print(f"Đang chạy Backtest thực chiến (CÓ TÍNH PHÍ GIAO DỊCH {CONFIG.COST_RATE * 100}%)...")
+        print("-------------------------------------------------------")
+        
+        test_env = DummyVecEnv([lambda: AdvancedPortfolioEnv(
+            returns_test, ai_test, strategies_test, weights_dim, num_strategies_features, tickers=tickers, dates=dates_test, is_test=True
+        )])
+        obs = test_env.reset()
+        
+        done = [False]
+        fold_returns = []
+        while not done[0]:
+            action, _states = model.predict(obs, deterministic=True)
+            obs, reward, done, info = test_env.step(action)
+            if 'net_return' in info[0]:
+                all_test_returns.append(info[0]['net_return'])
+                fold_returns.append(info[0]['net_return'])
+                
+
+        # Tính lợi nhuận lũy kế cho chu kỳ hiện tại
+        fold_profit = (np.prod(1 + np.array(fold_returns)) - 1) * 100
+        print(f"💰 KẾT QUẢ CHU KỲ {fold_idx}: Lợi nhuận thực chiến = {fold_profit:+.2f}%")
+        print("="*55 + "\n")
+        current_start += test_window
+        fold_idx += 1
+        
+
+    total_profit = (np.prod(1 + np.array(all_test_returns)) - 1) * 100
+    print(f"\n🏆 TỔNG LỢI NHUẬN BACKTEST TOÀN BỘ THỜI GIAN: {total_profit:+.2f}%")
+    print(f"\nĐã lưu bộ não AI mới nhất vào {getattr(CONFIG, 'SAVE_MODEL_PATH', 'AI_Brain_v8.zip')}. Có thể dùng trực tiếp cho Live Trading ngày mai!")
