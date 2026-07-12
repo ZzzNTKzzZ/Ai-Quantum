@@ -1,6 +1,6 @@
 import json
 
-with open(r"c:\Users\ADMIN\Desktop\Kaggle\model\ppo_grouped_rl_v6.ipynb", "r", encoding="utf-8") as f:
+with open(r"c:\Users\ADMIN\Desktop\Kaggle\model\ppo_grouped_rl_v5.ipynb", "r", encoding="utf-8") as f:
     nb = json.load(f)
 
 for cell in nb.get("cells", []):
@@ -47,6 +47,6 @@ for cell in nb.get("cells", []):
             if lines: lines[-1] = lines[-1][:-1]
             cell["source"] = lines
 
-with open(r"c:\Users\ADMIN\Desktop\Kaggle\model\ppo_grouped_rl_v7.ipynb", "w", encoding="utf-8") as f:
+with open(r"c:\Users\ADMIN\Desktop\Kaggle\model\ppo_grouped_rl_v8.ipynb", "w", encoding="utf-8") as f:
     json.dump(nb, f, indent=1, ensure_ascii=False)
-print("Created ppo_grouped_rl_v7.ipynb successfully.")
+print("Created ppo_grouped_rl_v8.ipynb successfully.")
