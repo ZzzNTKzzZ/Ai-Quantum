@@ -851,6 +851,7 @@ def walk_forward_train_test(returns_df, ai_features_df, strategies_features_df, 
 # In[ ]:
 
 
-returns_df, ai_features_df, strategies_features_df, weights_dim, tickers, num_strategies_features, dates = load_data()
-walk_forward_train_test(returns_df, ai_features_df, strategies_features_df, weights_dim, tickers, num_strategies_features)
+if __name__ == "__main__":
+    returns_df, ai_features_df, strategies_features_df, weights_dim, tickers, num_strategies_features, dates = load_data()
+    walk_forward_train_test(returns_df, ai_features_df, strategies_features_df, weights_dim, tickers, num_strategies_features)
 

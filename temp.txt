@@ -1,0 +1,379 @@
+
+# 1. Tạo nhãn dự báo (Target): Dự báo return_1d (T+1)
+master_ticker['target_return_1d'] = master_ticker.groupby('ticker')['close'].pct_change(1).shift(-1)
+master_ticker['target_bin'] = (master_ticker['target_return_1d'] > 0).astype(int)
+
+# Bỏ đi những dòng không có target (ngày cuối cùng của dữ liệu chưa biết tương lai)
+# LƯU Ý: Với Live Trading, ta VẪN CẦN giữ lại ngày cuối cùng dù target là NaN để dự báo. 
+# Nên ta sẽ copy ra một df riêng cho backtest.
+df_backtest = master_ticker.dropna(subset=['target_return_1d']).reset_index(drop=True)
+
+# Lọc các features
+
+semantic_sector_probs = [col for col in df_backtest.columns if col.startswith('prob_sector_')]
+market_probs = [col for col in df_backtest.columns if col.startswith('Market_Prob_')]
+ticker_probs = [col for col in df_backtest.columns if col.startswith('prob_ticker_')]
+feature_cols = market_probs + semantic_sector_probs + ticker_probs + ['rolling_vol_20d', 'return_5d', 'volume_ratio']
+
+# 2. Walk-Forward
+start_test_date = pd.Timestamp('2022-01-01')
+test_dates = sorted(df_backtest[df_backtest['time'] >= start_test_date]['time'].unique())
+
+print(f"Bắt đầu Walk-Forward Training cho {len(test_dates)} ngày giao dịch...")
+df_backtest['final_meta_pred_prob'] = np.nan
+
+from tqdm.notebook import tqdm
+import lightgbm as lgb
+import warnings
+warnings.filterwarnings('ignore')
+
+for i, current_date in enumerate(tqdm(test_dates, desc="Walk-Forward Daily Train")):
+    train_mask = df_backtest['time'] < current_date
+    X_train = df_backtest.loc[train_mask, feature_cols]
+    y_train = df_backtest.loc[train_mask, 'target_bin']
+    
+    test_mask = df_backtest['time'] == current_date
+    X_test = df_backtest.loc[test_mask, feature_cols]
+    
+    if len(X_train) < 1000 or len(X_test) == 0: continue
+        
+    clf = lgb.LGBMClassifier(n_estimators=100, learning_rate=0.05, random_state=42, verbose=-1, n_jobs=-1, class_weight='balanced')
+    clf.fit(X_train, y_train)
+    probs = clf.predict_proba(X_test)[:, 1]
+    df_backtest.loc[test_mask, 'final_meta_pred_prob'] = probs
+
+# 3. Đánh giá
+test_mask_all = df_backtest['time'] >= start_test_date
+y_test_all = df_backtest.loc[test_mask_all, 'target_bin']
+probs_all = df_backtest.loc[test_mask_all, 'final_meta_pred_prob']
+
+valid_idx = probs_all.notna()
+y_test_all = y_test_all[valid_idx]
+probs_all = probs_all[valid_idx]
+preds_all = (probs_all > 0.5).astype(int)
+
+from sklearn.metrics import classification_report, roc_auc_score
+print("\n--- BÁO CÁO PHÂN LOẠI WALK-FORWARD (RETURN_1D) ---")
+print(classification_report(y_test_all, preds_all))
+print(f"ROC-AUC Score (Daily Walk-Forward): {roc_auc_score(y_test_all, probs_all):.4f}")
+
+# Cập nhật kết quả backtest vào master_ticker
+master_ticker = master_ticker.merge(df_backtest[['time', 'ticker', 'final_meta_pred_prob']], on=['time', 'ticker'], how='left')
+
+=====
+### 9.2 Chế độ Live Trading (Dự báo ngày T+1)
+**Mục đích:** Dùng để ra quyết định mua/bán hằng ngày.
+**Cách hoạt động:** Chỉ lấy ngày giao dịch cuối cùng trong file dữ liệu làm tập Test, toàn bộ phần lịch sử làm Train. Chạy cực nhanh (1 giây). Bỏ qua hoàn toàn dữ liệu mục tiêu (target) của ngày cuối vì nó chưa xảy ra.
+=====
+
+import lightgbm as lgb
+
+print(f"=== CHẾ ĐỘ LIVE TRADING ===")
+# Xác định ngày cuối cùng có trong dữ liệu
+latest_date = master_ticker['time'].max()
+print(f"Ngày giao dịch mới nhất (T): {latest_date.strftime('%Y-%m-%d')}")
+
+# Tập Train: Tất cả dữ liệu trước ngày T (phải loại bỏ các dòng NaN ở target)
+train_mask = (master_ticker['time'] < latest_date) & (master_ticker['target_return_1d'].notna())
+X_train_live = master_ticker.loc[train_mask, feature_cols]
+y_train_live = master_ticker.loc[train_mask, 'target_bin']
+
+# Tập Test: Duy nhất dữ liệu của ngày T
+test_mask = master_ticker['time'] == latest_date
+X_test_live = master_ticker.loc[test_mask, feature_cols]
+
+print(f"Đang huấn luyện mô hình Live trên {len(X_train_live)} điểm dữ liệu lịch sử...")
+clf_live = lgb.LGBMClassifier(n_estimators=100, learning_rate=0.05, random_state=42, verbose=-1, n_jobs=-1, class_weight='balanced')
+clf_live.fit(X_train_live, y_train_live)
+
+print(f"Đang dự báo xác suất tăng giá cho phiên ngày mai (T+1)...")
+probs_live = clf_live.predict_proba(X_test_live)[:, 1]
+
+# Gán kết quả vào master_ticker
+master_ticker.loc[test_mask, 'final_meta_pred_prob'] = probs_live
+
+# Bảng xếp hạng tín hiệu
+live_results = master_ticker.loc[test_mask, ['time', 'ticker', 'industry', 'close', 'final_meta_pred_prob']].copy()
+live_results['Tín Hiệu'] = live_results['final_meta_pred_prob'].apply(lambda x: 'Tăng (Khuyên Mua)' if x > 0.5 else 'Giảm (Cảnh Báo)')
+live_results = live_results.sort_values('final_meta_pred_prob', ascending=False).reset_index(drop=True)
+
+print("\n🏆 TOP MÃ CỔ PHIẾU TIỀM NĂNG NHẤT CHO T+1:")
+display(live_results.head(10))
+
+=====
+### 9.3 Thống kê Hiệu suất Tài chính (Financial Backtest)
+**Mục đích:** Mô phỏng giao dịch thực tế trên tập Walk-Forward OOS. So sánh Lợi nhuận tích lũy (Equity Curve) và Sharpe Ratio của Chiến lược so với việc Mua & Nắm giữ toàn bộ rổ cổ phiếu.
+**Quy tắc giả lập:** 
+- Vốn được chia đều cho tất cả các mã (Ví dụ rổ có 46 mã, mỗi mã chiếm 1/46 vốn).
+- Ngày T: Nếu Meta-Classifier dự báo `prob > 0.5`, ta mua/nắm giữ mã đó ở ngày T+1. Nếu `prob <= 0.5`, bán ra giữ tiền mặt (lợi suất = 0).
+=====
+
+import numpy as np
+import matplotlib.pyplot as plt
+import pandas as pd
+
+if 'df_backtest' in locals() and 'final_meta_pred_prob' in df_backtest.columns:
+    df_bt = df_backtest.dropna(subset=['final_meta_pred_prob']).copy()
+    N_stocks = df_bt['ticker'].nunique()
+    
+    # 1. Chiến lược 1: Mua rải đều (AI Equal Weight)
+    # Lệnh mua ăn target_return_1d, lệnh đứng ngoài ăn 0%
+    df_bt['signal_eq'] = (df_bt['final_meta_pred_prob'] > 0.4).astype(int)
+    port_eq = df_bt.groupby('time').apply(
+        lambda x: (x['target_return_1d'] * x['signal_eq']).sum() / N_stocks
+    ).reset_index(name='ret_eq')
+    
+    # 2. Chiến lược 2: Tập trung Top 5 (AI Top 5 Conviction)
+    # Mỗi ngày chọn ra 5 mã có xác suất cao nhất. Nếu xác suất > 0.5 thì mua (dành 20% vốn).
+    def top_k_return(day_data, k=5):
+        # Sắp xếp từ cao xuống thấp
+        top_k = day_data.sort_values('final_meta_pred_prob', ascending=False).head(k)
+        # Chỉ mua những mã > 0.5
+        top_k_buy = top_k[top_k['final_meta_pred_prob'] > 0.4]
+        if len(top_k_buy) == 0:
+            return 0.0
+        # Tính trung bình lợi nhuận của k mã (vốn chia đều k phần)
+        return top_k_buy['target_return_1d'].sum() / k
+
+    port_top5 = df_bt.groupby('time').apply(lambda x: top_k_return(x, k=5)).reset_index(name='ret_top5')
+    
+    # 3. Chiến lược Benchmark (Buy & Hold toàn bộ rổ)
+    bench = df_bt.groupby('time').apply(
+        lambda x: x['target_return_1d'].sum() / N_stocks
+    ).reset_index(name='ret_bench')
+    
+    # Gộp kết quả
+    df_perf = pd.merge(port_eq, port_top5, on='time')
+    df_perf = pd.merge(df_perf, bench, on='time')
+    
+    df_perf['cum_eq'] = (1 + df_perf['ret_eq']).cumprod()
+    df_perf['cum_top5'] = (1 + df_perf['ret_top5']).cumprod()
+    df_perf['cum_bench'] = (1 + df_perf['ret_bench']).cumprod()
+    
+    # Hàm tính Metrics
+    def calc_metrics(returns):
+        cum = (1 + returns).cumprod()
+        ann_ret = (cum.iloc[-1] ** (252 / len(returns))) - 1
+        ann_vol = returns.std() * np.sqrt(252)
+        sharpe = ann_ret / ann_vol if ann_vol > 0 else 0
+        roll_max = cum.cummax()
+        drawdown = cum / roll_max - 1
+        max_dd = drawdown.min()
+        win_rate = (returns > 0).mean()
+        return ann_ret, ann_vol, sharpe, max_dd, win_rate
+
+    metrics_eq = calc_metrics(df_perf['ret_eq'])
+    metrics_top5 = calc_metrics(df_perf['ret_top5'])
+    metrics_bench = calc_metrics(df_perf['ret_bench'])
+    
+    # Hiển thị Bảng Thống Kê
+    perf_table = pd.DataFrame({
+        'AI Tập Trung (Top 5)': [f"{metrics_top5[0]*100:.1f}%", f"{metrics_top5[1]*100:.1f}%", f"{metrics_top5[2]:.2f}", f"{metrics_top5[3]*100:.1f}%", f"{metrics_top5[4]*100:.1f}%"],
+        'AI Rải Đều (Equal)': [f"{metrics_eq[0]*100:.1f}%", f"{metrics_eq[1]*100:.1f}%", f"{metrics_eq[2]:.2f}", f"{metrics_eq[3]*100:.1f}%", f"{metrics_eq[4]*100:.1f}%"],
+        'Buy & Hold Benchmark': [f"{metrics_bench[0]*100:.1f}%", f"{metrics_bench[1]*100:.1f}%", f"{metrics_bench[2]:.2f}", f"{metrics_bench[3]*100:.1f}%", f"{metrics_bench[4]*100:.1f}%"]
+    }, index=['Lợi nhuận năm (Ann. Ret)', 'Biến động năm (Ann. Vol)', 'Sharpe Ratio', 'Max Drawdown', 'Tỷ lệ ngày lãi (Win Rate)'])
+    
+    print("\n📊 BẢNG THỐNG KÊ HIỆU SUẤT GIAO DỊCH VỚI NHIỀU CHIẾN THUẬT (OOS)")
+    display(perf_table)
+    
+    # Vẽ Equity Curve
+    plt.figure(figsize=(14, 7))
+    plt.plot(df_perf['time'], df_perf['cum_top5'], label=f"AI Tập Trung Top 5 (Sharpe: {metrics_top5[2]:.2f})", color='#f39c12', linewidth=2.5)
+    plt.plot(df_perf['time'], df_perf['cum_eq'], label=f"AI Rải Đều (Sharpe: {metrics_eq[2]:.2f})", color='#e74c3c', linewidth=2)
+    plt.plot(df_perf['time'], df_perf['cum_bench'], label=f"Thị trường (Sharpe: {metrics_bench[2]:.2f})", color='#95a5a6', linewidth=1.5, alpha=0.8)
+    
+    plt.title("📈 Đường cong Lợi nhuận (Equity Curve) - Đa Chiến Thuật", fontsize=16, fontweight='bold')
+    plt.ylabel("Tài khoản (Tỉ lệ)", fontsize=12)
+    plt.xlabel("Thời gian", fontsize=12)
+    plt.legend(fontsize=12)
+    plt.grid(True, alpha=0.3)
+    
+    plt.tight_layout()
+    plt.show()
+else:
+    print("Vui lòng chạy Ô 9.1 (Walk-Forward Backtest) trước để có dữ liệu vẽ biểu đồ!")
+
+=====
+## 10. Lưu Kết Quả & Trực Quan Hóa Tương Tác
+=====
+OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
+
+# 1. Lưu Market Regimes
+if 'global_vars' in globals():
+    global_vars.to_parquet(OUTPUT_DIR / 'market_regimes.parquet', index=False)
+    global_vars.to_csv(OUTPUT_DIR / 'market_regimes.csv', index=False)
+    print(f"Đã lưu: market_regimes (.parquet & .csv) {global_vars.shape}")
+
+# 2. Lưu Sector Regimes
+if 'df_sector_hmm' in globals():
+    df_sector_hmm.to_parquet(OUTPUT_DIR / 'sector_regimes.parquet', index=False)
+    df_sector_hmm.to_csv(OUTPUT_DIR / 'sector_regimes.csv', index=False)
+    print(f"Đã lưu: sector_regimes (.parquet & .csv){df_sector_hmm.shape}")
+
+# 3. Lưu Ticker Regimes (Master File)
+master_ticker.to_parquet(OUTPUT_DIR / 'master_drl_ready_full.parquet', index=False)
+master_ticker.to_csv(OUTPUT_DIR / 'master_drl_ready_full.csv', index=False)
+print("Đã lưu: master_drl_ready_full (.parquet & .csv)")
+print("\nHoàn tất quá trình lưu kết quả!")
+
+import ipywidgets as widgets
+from ipywidgets import interactive_output
+import matplotlib.pyplot as plt
+from matplotlib.patches import Patch
+
+df_plot = master_ticker.copy()
+if 'df_market_res' in globals() and 'market_regime_label' in df_market_res.columns:
+    df_market_true = df_market_res[['time', 'market_regime_label']].rename(columns={'market_regime_label': 'true_market_regime'})
+    df_plot = df_plot.merge(df_market_true, on='time', how='left')
+else:
+    df_plot['true_market_regime'] = df_plot.get('market_regime_label', df_plot.get('true_market_regime', 'Unknown'))
+
+if 'market_regime_label' in df_plot.columns:
+    df_plot.rename(columns={'market_regime_label': 'ticker_regime'}, inplace=True)
+
+SEMANTIC_COLORS = {
+    'Bull': '#2ecc71',
+    'CalmBull': '#2ecc71',
+    'Bear': '#e74c3c',
+    'Crisis': '#e74c3c',
+    'Euphoria': '#f39c12',
+    'Sideways': '#95a5a6',
+    'Tranquil': '#95a5a6',
+    'State_0': '#2ecc71',
+    'State_1': '#e74c3c',
+    'State_2': '#95a5a6',
+    'Tier0': '#e74c3c',
+    'Tier1': '#95a5a6',
+    'Tier2': '#2ecc71',
+    'Unknown': '#e0e0e0'
+}
+
+def get_color(label):
+    return SEMANTIC_COLORS.get(label, '#e0e0e0')
+
+def plot_ticker_regimes(ticker, date_range):
+    sub_df = df_plot[
+        (df_plot['ticker'] == ticker) &
+        (df_plot['time'] >= date_range[0]) &
+        (df_plot['time'] <= date_range[1])
+    ].copy().sort_values('time').reset_index(drop=True)
+    
+    if len(sub_df) == 0:
+        print("Không có dữ liệu cho khoảng thời gian này.")
+        return
+        
+    fig, (ax1, ax2, ax3, ax4, ax5) = plt.subplots(5, 1, figsize=(16, 18), sharex=True, gridspec_kw={'height_ratios': [3, 3, 3, 1.5, 1.5]})
+    times = sub_df['time']
+    
+    # 1. Market Regime vs VN-Index Close
+    ax1.set_title(f"Mã: {ticker} | Ngành: {sub_df['industry'].iloc[0]}", fontsize=16, fontweight='bold')
+    ax1.set_ylabel("VN-Index (Market)", fontsize=12)
+    ax1.grid(True, alpha=0.3)
+    
+    m_regimes = sub_df['true_market_regime']
+    for i in range(1, len(sub_df)):
+        if pd.notna(m_regimes.iloc[i]):
+            c = get_color(m_regimes.iloc[i])
+            ax1.plot([times.iloc[i-1], times.iloc[i]], [sub_df['vnindex_close'].iloc[i-1], sub_df['vnindex_close'].iloc[i]], color=c, linewidth=1.5)
+        
+    present_market = sorted(m_regimes.dropna().unique())
+    legend_elements_1 = [Patch(facecolor=get_color(reg), edgecolor='none', label=f'Market: {reg}') for reg in present_market]
+    ax1.legend(handles=legend_elements_1, loc='upper left', bbox_to_anchor=(1.01, 1))
+    
+    # 2. Sector Regime vs Ticker Close
+    ax2.set_ylabel("Giá Ngành (Sector)", fontsize=12)
+    ax2.grid(True, alpha=0.3)
+    
+    s_regimes = sub_df['sector_regime_label']
+    for i in range(1, len(sub_df)):
+        if pd.notna(s_regimes.iloc[i]):
+            c = get_color(s_regimes.iloc[i])
+            ax2.plot([times.iloc[i-1], times.iloc[i]], [sub_df['close'].iloc[i-1], sub_df['close'].iloc[i]], color=c, linewidth=1.5)
+        
+    present_sector = sorted(s_regimes.dropna().unique())
+    legend_elements_2 = [Patch(facecolor=get_color(reg), edgecolor='none', label=f'Sector: {reg}') for reg in present_sector]
+    ax2.legend(handles=legend_elements_2, loc='upper left', bbox_to_anchor=(1.01, 1))
+
+    # 3. Ticker Regime vs Ticker Close
+    ax3.set_ylabel("Giá Mã (Ticker)", fontsize=12)
+    ax3.grid(True, alpha=0.3)
+    
+    t_regimes = sub_df['ticker_regime_label']
+    for i in range(1, len(sub_df)):
+        if pd.notna(t_regimes.iloc[i]):
+            c = get_color(t_regimes.iloc[i])
+            ax3.plot([times.iloc[i-1], times.iloc[i]], [sub_df['close'].iloc[i-1], sub_df['close'].iloc[i]], color=c, linewidth=1.5)
+        
+    present_ticker = sorted(t_regimes.dropna().unique())
+    legend_elements_3 = [Patch(facecolor=get_color(reg), edgecolor='none', label=f'Ticker: {reg}') for reg in present_ticker]
+    ax3.legend(handles=legend_elements_3, loc='upper left', bbox_to_anchor=(1.01, 1))
+    
+    # 4. Volume
+    ax4.bar(times, sub_df['volume'], color='grey', alpha=0.6, label="Volume")
+    ax4.set_ylabel("Khối Lượng", fontsize=12)
+    ax4.grid(True, alpha=0.3)
+    
+    # 5. Meta-Classifier Prob
+    if 'final_meta_pred_prob' in sub_df.columns:
+        ax5.plot(times, sub_df['final_meta_pred_prob'], color='blue', linewidth=1.5, label="Xác suất tăng T+1 (Meta)")
+        ax5.axhline(0.5, color='red', linestyle='--', alpha=0.5)
+        ax5.fill_between(times, sub_df['final_meta_pred_prob'], 0.5, where=(sub_df['final_meta_pred_prob'] > 0.5), color='#2ecc71', alpha=0.3)
+        ax5.fill_between(times, sub_df['final_meta_pred_prob'], 0.5, where=(sub_df['final_meta_pred_prob'] <= 0.5), color='#e74c3c', alpha=0.3)
+        ax5.set_ylabel("Xác suất Tăng", fontsize=12)
+        ax5.legend(loc='upper left', bbox_to_anchor=(1.01, 1))
+        ax5.set_ylim(0, 1)
+    
+    ax5.set_xlabel("Thời Gian", fontsize=12)
+    ax5.grid(True, alpha=0.3)
+    
+    plt.tight_layout()
+    plt.show()
+
+ticker_dropdown = widgets.Dropdown(options=sorted(df_plot['ticker'].unique()), value=df_plot['ticker'].iloc[0], description='Mã Ticker:')
+dates = sorted(df_plot['time'].unique())
+date_slider = widgets.SelectionRangeSlider(options=dates, index=(0, len(dates)-1), description='Khoảng Đo:', orientation='horizontal', layout={'width': '80%'})
+
+ui = widgets.VBox([ticker_dropdown, date_slider])
+out = interactive_output(plot_ticker_regimes, {'ticker': ticker_dropdown, 'date_range': date_slider})
+
+display(ui, out)
+
+=====
+## 11. Hiển Thị Biểu Đồ Tĩnh (Mã BID)
+=====
+
+
+
+ticker_to_plot = 'BID'
+date_range = (df_plot['time'].min(), df_plot['time'].max())
+
+print(f"Đang vẽ biểu đồ tĩnh cho {ticker_to_plot}...")
+plot_ticker_regimes(ticker_to_plot, date_range)
+
+=====
+import matplotlib.pyplot as plt
+from sklearn.metrics import roc_curve, auc
+
+fpr, tpr, _ = roc_curve(y_test_all, probs_all)
+roc_auc = auc(fpr, tpr)
+
+plt.figure(figsize=(8, 6))
+plt.plot(fpr, tpr, color='darkorange', lw=2, label=f'ROC curve (AUC = {roc_auc:.4f})')
+plt.plot([0, 1], [0, 1], color='navy', lw=2, linestyle='--')
+plt.xlim([0.0, 1.0])
+plt.ylim([0.0, 1.05])
+plt.xlabel('False Positive Rate')
+plt.ylabel('True Positive Rate')
+plt.title('Receiver Operating Characteristic (ROC)')
+plt.legend(loc="lower right")
+
+artifact_dir = r'C:\Users\ADMIN\.gemini\antigravity-cli\brain\12658c65-0507-48c7-a2d2-82b401dc1a40'
+if not os.path.exists(artifact_dir):
+    os.makedirs(artifact_dir)
+    
+img_path = os.path.join(artifact_dir, 'roc_curve.png')
+plt.savefig(img_path, dpi=150, bbox_inches='tight')
+print(f"ROC curve saved to {img_path}")
+plt.show()
+
+=====
