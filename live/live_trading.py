@@ -1,3 +1,4 @@
+
 import pandas as pd
 import numpy as np
 import lightgbm as lgb
@@ -22,9 +23,11 @@ master_ticker['target_return_1d'] = master_ticker.groupby('ticker')['close'].pct
 master_ticker['target_bin'] = (master_ticker['target_return_1d'] > 0).astype(int)
 
 # 2. Định nghĩa các cột Features
-macro_probs = [col for col in master_ticker.columns if col.startswith('prob_macro_')]
-market_probs = [col for col in master_ticker.columns if col.startswith('prob_market_')]
-feature_cols = market_probs + macro_probs + ['rolling_vol_20d', 'return_5d', 'volume_ratio']
+macro_probs = [col for col in master_ticker.columns if col.startswith('Macro_Prob_')]
+market_probs = [col for col in master_ticker.columns if col.startswith('Market_Prob_')]
+sector_probs = [col for col in master_ticker.columns if col.startswith('prob_sector_')]
+ticker_probs = [col for col in master_ticker.columns if col.startswith('prob_ticker_')]
+feature_cols = ticker_probs + sector_probs + market_probs + macro_probs + ['rolling_vol_20d', 'return_5d', 'return_20d', 'rolling_vol_5', 'mom_1M', 'dist_MA50', 'volume_ratio']
 
 # Kiểm tra xem dữ liệu có đủ feature không
 missing_features = [f for f in feature_cols if f not in master_ticker.columns]

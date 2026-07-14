@@ -214,10 +214,10 @@ def load_data():
     # Biên độ dao động của cái hộp nhỏ hơn 15%
     is_accumulation_df = (highest_high_21_df - lowest_low_21_df) / lowest_low_21_df <= 0.15
     # Bóc tách dữ liệu HMM từ raw_df
-    prob0_df = raw_df.pivot(index='time', columns='ticker', values='prob_market_0').fillna(0) 
-    prob1_df = raw_df.pivot(index='time', columns='ticker', values='prob_market_1').fillna(0) 
-    prob2_df = raw_df.pivot(index='time', columns='ticker', values='prob_market_2').fillna(0) 
-    prob3_df = raw_df.pivot(index='time', columns='ticker', values='prob_market_3').fillna(0)
+    prob0_df = raw_df.pivot(index='time', columns='ticker', values='prob_ticker_0').fillna(0) 
+    prob1_df = raw_df.pivot(index='time', columns='ticker', values='prob_ticker_1').fillna(0) 
+    prob2_df = raw_df.pivot(index='time', columns='ticker', values='prob_ticker_2').fillna(0) 
+    # prob3_df không tồn tại vì K_TICKER = 3, và model cũ cũng không đưa prob3_df vào mạng Nơ-ron.
     vol_20d_df = raw_df.pivot(index='time', columns='ticker', values='rolling_vol_20d').fillna(0)
     ret_20d_df = raw_df.pivot(index='time', columns='ticker', values='return_20d').fillna(0)
     vol_ratio_df = raw_df.pivot(index='time', columns='ticker', values='volume_ratio').fillna(0)
