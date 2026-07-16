@@ -60,8 +60,8 @@ def main():
         df = df.set_index("time")
         df = df.reindex(master_dates)
         
-        # Forward-fill first, then backward-fill for early dates
-        df = df.ffill().bfill()
+        # Forward-fill first for missing days. We DO NOT backward-fill (bfill) to avoid look-ahead bias.
+        df = df.ffill()
         
         # Reset index to make 'time' a column again
         df = df.reset_index()

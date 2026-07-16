@@ -45,7 +45,7 @@ def get_future_prices_yfinance(ticker, start_date, days=3):
     return None
 
 def evaluate_predictions():
-    csv_file = r"c:\Users\ADMIN\Desktop\Kaggle\live\output\live_trading_signals_20260623.csv"
+    csv_file = r"c:\Users\ADMIN\Desktop\Kaggle\live\output\live_trading_signals_20260618.csv"
     
     try:
         df = pd.read_csv(csv_file)
@@ -53,7 +53,7 @@ def evaluate_predictions():
         print(f"❌ Không tìm thấy file: {csv_file}")
         return
 
-    date_to_check = "2026-06-24"
+    date_to_check = "2026-06-20"
     print(f"Bắt đầu đánh giá dự báo cho tín hiệu ngày: {date_to_check}\n")
     print(f"{'Mã':<5} | {'Tín Hiệu':<18} | {'Giá T0':<7} | {'Giá T+1':<7} | {'Giá T+2':<7} | {'Lãi/Lỗ (T+2)':<12} | {'Kết Quả'}")
     print("-" * 80)
