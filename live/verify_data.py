@@ -1,3 +1,8 @@
+import os
+import sys
+import glob
+
+sys.stdout.reconfigure(encoding='utf-8')
 import pandas as pd
 import yfinance as yf
 from datetime import datetime, timedelta
@@ -17,7 +22,6 @@ def get_future_prices_vndirect(ticker, start_date, days=3):
         response = requests.get(url, headers=headers, timeout=10)
         data = response.json()
         if data and 'data' in data and len(data['data']) >= days:
-            # Lấy N ngày giao dịch đầu tiên
             prices = []
             for i in range(days):
                 close_price = data['data'][i].get('adClose') or data['data'][i].get('close')
@@ -38,34 +42,38 @@ def get_future_prices_yfinance(ticker, start_date, days=3):
         hist = stock.history(start=start_date, end=end_date)
         if len(hist) >= days:
             prices = hist['Close'].iloc[:days].tolist()
-            # Chia 1000 để chuẩn hóa giá VNĐ
             return [p / 1000 for p in prices]
     except Exception as e:
         pass
     return None
 
 def evaluate_predictions():
-    csv_file = r"c:\Users\ADMIN\Desktop\Kaggle\live\output\live_trading_signals_20260618.csv"
+    script_dir = os.path.dirname(os.path.abspath(__file__))
+    output_dir = os.path.join(script_dir, "output")
     
-    try:
-        df = pd.read_csv(csv_file)
-    except FileNotFoundError:
-        print(f"❌ Không tìm thấy file: {csv_file}")
+    # Tìm file CSV mới nhất
+    signal_files = glob.glob(os.path.join(output_dir, "live_trading_signals_*.csv"))
+    if not signal_files:
+        print("❌ Không tìm thấy file live_trading_signals_*.csv nào trong thư mục output.")
         return
+        
+    latest_csv = max(signal_files, key=os.path.getctime)
+    print(f"Đang phân tích file tín hiệu mới nhất: {os.path.basename(latest_csv)}")
+    
+    df = pd.read_csv(latest_csv)
+    
+    # Lấy ngày từ tên file
+    date_str_raw = os.path.basename(latest_csv).split('_')[-1].split('.')[0]
+    date_to_check = datetime.strptime(date_str_raw, "%Y%m%d").strftime("%Y-%m-%d")
+    
+    print(f"Bắt đầu đánh giá dự báo từ ngày: {date_to_check}\n")
 
-    date_to_check = "2026-06-20"
-    print(f"Bắt đầu đánh giá dự báo cho tín hiệu ngày: {date_to_check}\n")
-    print(f"{'Mã':<5} | {'Tín Hiệu':<18} | {'Giá T0':<7} | {'Giá T+1':<7} | {'Giá T+2':<7} | {'Lãi/Lỗ (T+2)':<12} | {'Kết Quả'}")
-    print("-" * 80)
-
-    correct_predictions = 0
-    total_evaluated = 0
+    results_list = []
     
     for index, row in df.iterrows():
         ticker = row['ticker']
         signal = row['Tín Hiệu']
         
-        # Chỉ đánh giá các mã có khuyến nghị Mua hoặc Bán rõ ràng
         is_buy_signal = "Mua" in signal or "Tăng" in signal
         is_sell_signal = "Bán" in signal or "Giảm" in signal
         
@@ -77,7 +85,6 @@ def evaluate_predictions():
             prices = get_future_prices_yfinance(ticker, date_to_check, days=3)
             
         if prices is None or len(prices) < 3:
-            # print(f"⚠️ [{ticker}] Không đủ dữ liệu T+2 để đánh giá.")
             continue
             
         t0_price, t1_price, t2_price = prices[0], prices[1], prices[2]
@@ -85,10 +92,8 @@ def evaluate_predictions():
         if t0_price > 1000:
             t0_price, t1_price, t2_price = t0_price/1000, t1_price/1000, t2_price/1000
             
-        # Tính % thay đổi so với T0
         pct_change_t2 = ((t2_price - t0_price) / t0_price) * 100
         
-        # Đánh giá đúng sai
         if is_buy_signal:
             is_correct = pct_change_t2 > 0
         elif is_sell_signal:
@@ -96,30 +101,47 @@ def evaluate_predictions():
         else:
             is_correct = False
             
-        result_text = "✅ ĐÚNG" if is_correct else "❌ SAI"
-        if is_correct:
-            correct_predictions += 1
-            
-        total_evaluated += 1
-        
-        # Định dạng output
         signal_short = "MUA" if is_buy_signal else "BÁN/CẢNH BÁO"
-        color_change = f"+{pct_change_t2:.2f}%" if pct_change_t2 > 0 else f"{pct_change_t2:.2f}%"
+        result_text = "ĐÚNG" if is_correct else "SAI"
         
-        print(f"{ticker:<5} | {signal_short:<18} | {t0_price:<7.2f} | {t1_price:<7.2f} | {t2_price:<7.2f} | {color_change:<12} | {result_text}")
+        results_list.append({
+            "Mã": ticker,
+            "Tín Hiệu": signal_short,
+            "Giá T0": round(t0_price, 2),
+            "Giá T+1": round(t1_price, 2),
+            "Giá T+2": round(t2_price, 2),
+            "Lãi/Lỗ % (T+2)": round(pct_change_t2, 2),
+            "Đánh Giá": result_text
+        })
         
-        time.sleep(0.2) # Tránh bị block API
-
-    print("\n" + "="*40)
-    print("TỔNG KẾT HIỆU QUẢ DỰ BÁO (T+2)")
-    print("="*40)
-    print(f"Tổng số mã được đánh giá : {total_evaluated}")
-    if total_evaluated > 0:
-        win_rate = (correct_predictions / total_evaluated) * 100
-        print(f"Số dự báo ĐÚNG            : {correct_predictions}")
-        print(f"Tỷ lệ chiến thắng (Win rate): {win_rate:.2f}%")
-    else:
-        print("Không có mã nào được đánh giá.")
+        time.sleep(0.2)
+        
+    if not results_list:
+        print("Không có mã nào đủ dữ liệu T+2 để đánh giá.")
+        return
+        
+    leaderboard_df = pd.DataFrame(results_list)
+    # Sắp xếp Leaderboard: Lãi nhiều nhất xếp trên cùng
+    leaderboard_df = leaderboard_df.sort_values(by="Lãi/Lỗ % (T+2)", ascending=False).reset_index(drop=True)
+    
+    print("\n" + "="*50)
+    print("🏆 LEADERBOARD HIỆU QUẢ DỰ BÁO (T+2)")
+    print("="*50)
+    print(leaderboard_df.to_string(index=False))
+    
+    total = len(leaderboard_df)
+    correct = len(leaderboard_df[leaderboard_df["Đánh Giá"] == "ĐÚNG"])
+    win_rate = (correct / total) * 100
+    
+    print("\n" + "="*50)
+    print(f"Tổng số mã được đánh giá : {total}")
+    print(f"Số dự báo ĐÚNG            : {correct}")
+    print(f"Tỷ lệ chiến thắng (Win rate): {win_rate:.2f}%")
+    print("="*50)
+    
+    leaderboard_csv = os.path.join(output_dir, f"leaderboard_verification_{date_str_raw}.csv")
+    leaderboard_df.to_csv(leaderboard_csv, index=False, encoding='utf-8-sig')
+    print(f"\n[OK] Đã xuất Leaderboard ra file: {leaderboard_csv}")
 
 if __name__ == "__main__":
     evaluate_predictions()

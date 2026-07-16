@@ -1,4 +1,3 @@
-
 import pandas as pd
 import numpy as np
 import lightgbm as lgb
@@ -18,9 +17,15 @@ if not os.path.exists(data_path):
 print("Đang nạp dữ liệu...")
 master_ticker = pd.read_parquet(data_path)
 
-# 1. Chuẩn bị Target (Dự báo ngày T+1)
+# 1. Chuẩn bị Target (Dự báo ngày T+1, T+2, T+3)
 master_ticker['target_return_1d'] = master_ticker.groupby('ticker')['close'].pct_change(1).shift(-1)
-master_ticker['target_bin'] = (master_ticker['target_return_1d'] > 0).astype(int)
+master_ticker['target_bin_1d'] = (master_ticker['target_return_1d'] > 0).astype(int)
+
+master_ticker['target_return_2d'] = master_ticker.groupby('ticker')['close'].pct_change(2).shift(-2)
+master_ticker['target_bin_2d'] = (master_ticker['target_return_2d'] > 0).astype(int)
+
+master_ticker['target_return_3d'] = master_ticker.groupby('ticker')['close'].pct_change(3).shift(-3)
+master_ticker['target_bin_3d'] = (master_ticker['target_return_3d'] > 0).astype(int)
 
 # 2. Định nghĩa các cột Features
 macro_probs = [col for col in master_ticker.columns if col.startswith('Macro_Prob_')]
@@ -40,38 +45,45 @@ latest_date = master_ticker['time'].max()
 print(f"\n=== CHẾ ĐỘ LIVE TRADING ===")
 print(f"Ngày giao dịch mới nhất (T): {latest_date.strftime('%Y-%m-%d')}")
 
-# Train: Bỏ qua ngày cuối (vì target_return_1d bị NaN) và lấy tất cả lịch sử trước đó
-train_mask = (master_ticker['time'] < latest_date) & (master_ticker['target_return_1d'].notna())
-X_train_live = master_ticker.loc[train_mask, feature_cols]
-y_train_live = master_ticker.loc[train_mask, 'target_bin']
-
 # Test: Chỉ lấy đúng ngày hiện tại (T)
 test_mask = master_ticker['time'] == latest_date
 X_test_live = master_ticker.loc[test_mask, feature_cols]
-
-# 4. Huấn luyện Meta-Classifier
-print(f"Đang huấn luyện mô hình LightGBM trên {len(X_train_live)} điểm dữ liệu lịch sử...")
-clf_live = lgb.LGBMClassifier(
-    n_estimators=100, 
-    learning_rate=0.05, 
-    random_state=42, 
-    verbose=-1, 
-    n_jobs=-1, 
-    class_weight='balanced'
-)
-clf_live.fit(X_train_live, y_train_live)
-
-# 5. Dự báo cho T+1
-print(f"Đang dự báo xác suất tăng giá cho phiên ngày mai (T+1)...")
-probs_live = clf_live.predict_proba(X_test_live)[:, 1]
-
-# 6. Tổng hợp bảng tín hiệu
 live_results = master_ticker.loc[test_mask, ['time', 'ticker', 'close']].copy()
-live_results['Xác Suất Tăng'] = probs_live
+
+# 4. Huấn luyện Meta-Classifier và Dự báo cho T+1, T+2, T+3
+for horizon in [1, 2, 3]:
+    target_col = f'target_return_{horizon}d'
+    bin_col = f'target_bin_{horizon}d'
+    
+    # Train: Bỏ qua các ngày cuối (vì target bị NaN) và lấy tất cả lịch sử trước đó
+    train_mask = (master_ticker['time'] < latest_date) & (master_ticker[target_col].notna())
+    X_train_live = master_ticker.loc[train_mask, feature_cols]
+    y_train_live = master_ticker.loc[train_mask, bin_col]
+    
+    print(f"Đang huấn luyện mô hình LightGBM cho T+{horizon} ({len(X_train_live)} mẫu dữ liệu)...")
+    clf_live = lgb.LGBMClassifier(
+        n_estimators=100, 
+        learning_rate=0.05, 
+        random_state=42, 
+        verbose=-1, 
+        n_jobs=-1, 
+        class_weight='balanced'
+    )
+    clf_live.fit(X_train_live, y_train_live)
+    
+    # Dự báo
+    probs_live = clf_live.predict_proba(X_test_live)[:, 1]
+    live_results[f'XS Tăng T+{horizon}'] = np.round(probs_live, 4)
+
+# 5. Tổng hợp bảng tín hiệu
+# Trung bình xác suất của 3 ngày để làm tín hiệu chính thức
+live_results['Xác Suất Tăng'] = live_results[['XS Tăng T+1', 'XS Tăng T+2', 'XS Tăng T+3']].mean(axis=1)
 live_results['Tín Hiệu'] = live_results['Xác Suất Tăng'].apply(lambda x: 'Tăng (Khuyên Mua)' if x > 0.5 else 'Giảm (Cảnh Báo)')
 live_results = live_results.sort_values('Xác Suất Tăng', ascending=False).reset_index(drop=True)
 
-print("\n🏆 TOP 15 MÃ CỔ PHIẾU TIỀM NĂNG NHẤT CHO NGÀY MAI:")
+print("\n🏆 TOP 15 MÃ CỔ PHIẾU TIỀM NĂNG NHẤT (Trung bình XS T+1, T+2, T+3):")
+# In format đẹp hơn
+pd.options.display.float_format = '{:.4f}'.format
 print(live_results.head(15).to_string(index=False))
 
 # Lưu tín hiệu ra CSV

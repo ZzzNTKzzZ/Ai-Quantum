@@ -2,6 +2,9 @@ import os
 import sys
 import numpy as np
 import pandas as pd
+
+# Đảm bảo in tiếng Việt ra console không bị lỗi
+sys.stdout.reconfigure(encoding='utf-8')
 import gymnasium as gym
 from gymnasium import spaces
 import torch
@@ -61,7 +64,8 @@ class CONFIG:
 
 def load_data():
     # 1. Nạp dữ liệu thô
-    raw_df = pd.read_parquet(r"output/master_drl_ready_ticker.parquet")
+    script_dir = os.path.dirname(os.path.abspath(__file__))
+    raw_df = pd.read_parquet(os.path.join(script_dir, "output", "master_drl_ready_ticker.parquet"))
     raw_df['time'] = pd.to_datetime(raw_df['time'])
     
     # Lấy các DataFrame cơ sở
@@ -627,8 +631,8 @@ def main():
     print('=====================================================')
     
     script_dir = os.path.dirname(os.path.abspath(__file__))
-    model_path = os.path.join(script_dir, "..", "model", "v7_3", "AI_Brain_v7_Seed321_Profit_50.80.zip")
-    env_path = os.path.join(script_dir, "..", "model", "v7_3", "vec_normalize.pkl")
+    model_path = os.path.join(script_dir, "..", "model", "v7_3_2", "AI_Brain_v7_Seed321_Profit_50.80.zip")
+    env_path = os.path.join(script_dir, "..", "model", "v7_3_2", "vec_normalize.pkl")
     
     if not os.path.exists(model_path):
         print(f"Lỗi: Không tìm thấy model tại {model_path}")

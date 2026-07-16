@@ -19,7 +19,7 @@ def check_and_update_macro():
     macro_file = os.path.join(raw_dir, "usdvnd.csv")
     
     needs_update = True
-    today_str = '2026-06-24' #  datetime.datetime.now().strftime('%Y-%m-%d')
+    today_str = '2026-06-26' #  datetime.datetime.now().strftime('%Y-%m-%d')
     start_date_str = "2016-11-10"
     
     if os.path.exists(macro_file):
